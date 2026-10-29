@@ -142,15 +142,17 @@ def get_ai_dataset(
         # 7. KEMBALIKAN DATASET UNTUK TIM AI
         # ====================================================
 
+        MIN_TRAINING_DAYS = 14
+
         return {
             "status": "success",
             "device_id": device_id,
             "total_days_with_data": len(dataset),
-            "ready_for_training": False,
+            "ready_for_training": len(dataset) >= MIN_TRAINING_DAYS,
             "data_source": "sensor_readings",
             "data": dataset
         }
-
+    
     except HTTPException:
         raise
 
