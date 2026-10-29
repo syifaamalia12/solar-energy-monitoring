@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "solar-cloudflare-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-23",
+  "observability": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "solar-cloudflare-api",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.155.0"
+  }
+}
