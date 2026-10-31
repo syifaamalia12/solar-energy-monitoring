@@ -1,4 +1,9 @@
 
+import { handleAuth, authErrorResponse } from "./auth.js";
+import { handleDeviceReference, requireOwnedDevice } from "./device-reference.js";
+import { handlePredictions, verifyAI } from "./predictions.js";
+import { handleRecommendations } from "./recommendations.js";
+
 const SCOPES =
   "https://www.googleapis.com/auth/firebase.database " +
   "https://www.googleapis.com/auth/userinfo.email";
@@ -115,11 +120,12 @@ async function getFirebaseAccessToken(env) {
   return cachedToken;
 }
 
-async function firebase(env, path, options = {}) {
+async function firebase(env, path, options = {}, query) {
   const base = env.FIREBASE_DATABASE_URL.replace(/\/+$/, "");
   const token = await getFirebaseAccessToken(env);
 
-  return fetch(`${base}/${path}.json`, {
+  const suffix = query ? `?${new URLSearchParams(query)}` : "";
+  return fetch(`${base}/${path}.json${suffix}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -255,6 +261,22 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
+    if (path === "/api/v1/ai/recommendations") {
+      return handleRecommendations(request, env, firebase);
+    }
+
+    if (["/api/v1/ai/predictions", "/api/v1/ai/predictions/latest", "/api/v1/ai/predictions/history"].includes(path)) {
+      return handlePredictions(request, env, path, firebase);
+    }
+
+    if (path === "/api/v1/device-reference" || path.startsWith("/api/v1/device-reference/")) {
+      return handleDeviceReference(request, env, path, firebase);
+    }
+
+    if (["/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/me"].includes(path)) {
+      return handleAuth(request, env, path, firebase);
+    }
+
     if (path === "/health" && request.method === "GET") {
       return json({
         status: "ok",
@@ -283,10 +305,10 @@ export default {
       return json({ detail: "Method Not Allowed" }, 405);
     }
 
-    if (
+    if (path === "/api/v1/monitoring" && (
       !env.IOT_API_KEY ||
       request.headers.get("x-api-key") !== env.IOT_API_KEY
-    ) {
+    )) {
       return json({ detail: "Unauthorized" }, 401);
     }
 
@@ -380,6 +402,16 @@ export default {
 
       if (!validId(deviceId)) {
         return json({ detail: "Invalid device_id" }, 422);
+      }
+
+      try {
+        if (path === "/api/v1/ai/dataset") {
+          await verifyAI(request, env);
+        } else {
+          await requireOwnedDevice(request, env, firebase, deviceId);
+        }
+      } catch (error) {
+        return authErrorResponse(error);
       }
 
       // GET: pembacaan terbaru

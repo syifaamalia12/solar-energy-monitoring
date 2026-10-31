@@ -1,3 +1,9 @@
+## Authentication — migrasi tahap 1
+
+Backend aktif memakai JavaScript `src/index.js` sesuai `wrangler.jsonc`.
+Jalankan `npm test` untuk pengujian otomatis dengan mock.
+Bagian Python di bawah merupakan dokumentasi template lama.
+
 ## Usage
 
 You can run the Worker defined by your new project by executing `wrangler dev` in this
