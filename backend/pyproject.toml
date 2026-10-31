@@ -1,0 +1,14 @@
+[project]
+name = "solar-cloudflare-api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "workers-py>=1.17.9"
+]
+
+[dependency-groups]
+dev = [
+    "workers-runtime-sdk"
+]
