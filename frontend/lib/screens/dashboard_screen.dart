@@ -10,9 +10,12 @@ import '../utils/measurement_format.dart';
 import '../widgets/app_states.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key, this.service});
+  const DashboardScreen({super.key, this.service, this.now});
 
   final DashboardService? service;
+
+  // Jam dapat diberikan oleh tes agar hasilnya tidak bergantung tanggal laptop.
+  final DateTime Function()? now;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -26,13 +29,15 @@ class _DashboardScreenState extends State<DashboardScreen>
   Timer? _timer;
   bool _isFetching = false;
 
+  DateTime _now() => widget.now?.call() ?? DateTime.now();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
     // main.dart memberikan layanan API saat aplikasi dijalankan.
-    // Default simulasi dipakai oleh tes yang tidak memberikan layanan.
+    // Simulasi dipakai oleh tes yang tidak memberikan layanan.
     _service =
         widget.service ?? MockDashboardService(deviceId: AppConfig.deviceId);
 
@@ -94,16 +99,16 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   String _todayWib() {
-    final now = DateTime.now().toUtc().add(const Duration(hours: 7));
-    return now.toIso8601String().substring(0, 10);
-  }
-
-  String _readingDateWib(DateTime timestamp) {
-    return timestamp
+    return _now()
         .toUtc()
         .add(const Duration(hours: 7))
         .toIso8601String()
         .substring(0, 10);
+  }
+
+  bool _isStale(DateTime timestamp) {
+    final age = _now().toUtc().difference(timestamp.toUtc());
+    return age > const Duration(minutes: 3);
   }
 
   @override
@@ -161,8 +166,6 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Widget _buildData(BuildContext context, DashboardData data) {
     final colors = Theme.of(context).colorScheme;
-    final readingIsFromAnotherDay =
-        _readingDateWib(data.readingTimestamp) != _todayWib();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -198,10 +201,15 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         ),
         const SizedBox(height: 16),
-        if (!data.isTestData && readingIsFromAnotherDay) ...[
+        if (_isStale(data.readingTimestamp)) ...[
+          Text(
+            'Belum ada data terbaru',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
           const Text(
-            'Perhatian: pembacaan terakhir bukan dari hari ini. '
-            'Periksa waktu pembacaan di bawah.',
+            'Pembacaan terakhir sudah lebih dari 3 menit. '
+            'Kondisi ini belum memastikan perangkat offline.',
           ),
           const SizedBox(height: 16),
         ],
