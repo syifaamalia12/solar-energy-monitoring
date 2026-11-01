@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
 import '../models/dashboard_data.dart';
+import '../services/api_dashboard_service.dart';
 import '../services/dashboard_service.dart';
+import '../utils/measurement_format.dart';
 import '../widgets/app_states.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -27,9 +29,10 @@ class _DashboardScreenState extends State<DashboardScreen>
   @override
   void initState() {
     super.initState();
-
     WidgetsBinding.instance.addObserver(this);
 
+    // main.dart memberikan layanan API saat aplikasi dijalankan.
+    // Default simulasi dipakai oleh tes yang tidak memberikan layanan.
     _service =
         widget.service ?? MockDashboardService(deviceId: AppConfig.deviceId);
 
@@ -53,7 +56,6 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   void _startTimer() {
     _timer?.cancel();
-
     _timer = Timer.periodic(AppConfig.refreshInterval, (_) => _reload());
   }
 
@@ -91,6 +93,19 @@ class _DashboardScreenState extends State<DashboardScreen>
         '${two(time.hour)}:${two(time.minute)} WIB';
   }
 
+  String _todayWib() {
+    final now = DateTime.now().toUtc().add(const Duration(hours: 7));
+    return now.toIso8601String().substring(0, 10);
+  }
+
+  String _readingDateWib(DateTime timestamp) {
+    return timestamp
+        .toUtc()
+        .add(const Duration(hours: 7))
+        .toIso8601String()
+        .substring(0, 10);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -110,8 +125,12 @@ class _DashboardScreenState extends State<DashboardScreen>
             }
 
             if (snapshot.hasError) {
+              final error = snapshot.error;
+
               return AppErrorState(
-                message: 'Data monitoring gagal dimuat. Silakan coba lagi.',
+                message: error is DashboardApiException
+                    ? error.message
+                    : 'Data monitoring gagal dimuat. Silakan coba lagi.',
                 onRetry: _reload,
               );
             }
@@ -142,34 +161,49 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Widget _buildData(BuildContext context, DashboardData data) {
     final colors = Theme.of(context).colorScheme;
+    final readingIsFromAnotherDay =
+        _readingDateWib(data.readingTimestamp) != _todayWib();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (data.isTestData) ...[
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: colors.secondaryContainer,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.science_outlined),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Data pengujian\n'
-                    'Angka di bawah hanya contoh tampilan, '
-                    'bukan pembacaan sensor atau hasil API.',
-                  ),
-                ),
-              ],
-            ),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: colors.secondaryContainer,
+            borderRadius: BorderRadius.circular(16),
           ),
-          const SizedBox(height: 20),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                data.isTestData
+                    ? Icons.science_outlined
+                    : Icons.cloud_done_outlined,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  data.isTestData
+                      ? 'Data pengujian\n'
+                            'Angka di bawah hanya contoh tampilan, '
+                            'bukan pembacaan sensor atau hasil API.'
+                      : 'Data dari API\n'
+                            'Menampilkan pembacaan terakhir yang tersedia. '
+                            'Data pada server masih dapat berupa data pengujian.',
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (!data.isTestData && readingIsFromAnotherDay) ...[
+          const Text(
+            'Perhatian: pembacaan terakhir bukan dari hari ini. '
+            'Periksa waktu pembacaan di bawah.',
+          ),
+          const SizedBox(height: 16),
         ],
         LayoutBuilder(
           builder: (context, constraints) {
@@ -184,28 +218,30 @@ class _DashboardScreenState extends State<DashboardScreen>
                 _MetricCard(
                   width: cardWidth,
                   label: 'Tegangan',
-                  value: data.voltageV.toStringAsFixed(2),
+                  value: formatMeasurement(data.voltageV, decimals: 2),
                   unit: 'V',
                   icon: Icons.bolt_outlined,
                 ),
                 _MetricCard(
                   width: cardWidth,
                   label: 'Arus',
-                  value: data.currentA.toStringAsFixed(4),
+                  value: formatMeasurement(data.currentA),
                   unit: 'A',
                   icon: Icons.electrical_services_outlined,
                 ),
                 _MetricCard(
                   width: cardWidth,
                   label: 'Daya',
-                  value: data.powerW.toStringAsFixed(4),
+                  value: formatMeasurement(data.powerW),
                   unit: 'W',
                   icon: Icons.solar_power_outlined,
                 ),
                 _MetricCard(
                   width: cardWidth,
                   label: 'Energi harian',
-                  value: data.totalEnergyWh.toStringAsFixed(4),
+                  value: data.hasDailyReadings
+                      ? formatMeasurement(data.totalEnergyWh)
+                      : '--',
                   unit: 'Wh',
                   icon: Icons.energy_savings_leaf_outlined,
                 ),
@@ -215,12 +251,20 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
         const SizedBox(height: 12),
         Text('Tanggal rekap energi (WIB): ${data.summaryDate}'),
+        if (!data.hasDailyReadings) ...[
+          const SizedBox(height: 8),
+          Text(
+            data.summaryDate == _todayWib()
+                ? 'Belum ada data energi hari ini.'
+                : 'Belum ada pembacaan pada tanggal rekap tersebut.',
+          ),
+        ],
         const SizedBox(height: 8),
         Text(
           data.isTestData
               ? 'Simulasi diambil ulang setiap 60 detik. '
                     'Nilai contoh tetap sama.'
-              : 'Data diambil ulang setiap 60 detik.',
+              : 'Data diambil ulang setiap 60 detik saat Dashboard aktif.',
         ),
         const SizedBox(height: 20),
         Card(
@@ -239,7 +283,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       Text(
                         data.isTestData
                             ? 'Waktu pembacaan contoh'
-                            : 'Waktu pembacaan sensor',
+                            : 'Waktu pembacaan terakhir',
                       ),
                       const SizedBox(height: 4),
                       Text(_formatWib(data.readingTimestamp)),
@@ -253,6 +297,12 @@ class _DashboardScreenState extends State<DashboardScreen>
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _reload,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Muat ulang'),
         ),
       ],
     );

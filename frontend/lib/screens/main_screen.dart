@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
+import '../services/dashboard_service.dart';
 import 'dashboard_screen.dart';
 
 class MainScreen extends StatefulWidget {
-  const MainScreen({super.key});
+  const MainScreen({super.key, this.dashboardService});
+
+  final DashboardService? dashboardService;
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -56,7 +59,7 @@ class _MainScreenState extends State<MainScreen> {
               Text('Perangkat: ${AppConfig.deviceId}'),
               const SizedBox(height: 24),
               if (_selectedIndex == 0)
-                const DashboardScreen()
+                DashboardScreen(service: widget.dashboardService)
               else
                 Card(
                   child: Padding(
@@ -82,7 +85,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                         const SizedBox(height: 16),
                         const Text(
-                          'Kerangka tampilan — belum terhubung ke API.',
+                          'Kerangka tampilan - belum terhubung ke API.',
                           textAlign: TextAlign.center,
                         ),
                       ],

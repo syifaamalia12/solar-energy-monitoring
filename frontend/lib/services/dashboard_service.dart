@@ -20,6 +20,7 @@ class MockDashboardService implements DashboardService {
       summaryDate: '2026-11-01',
       readingTimestamp: DateTime.parse('2026-11-01T12:00:00+07:00'),
       isTestData: true,
+      readingCount: 8,
     );
   }
 }
