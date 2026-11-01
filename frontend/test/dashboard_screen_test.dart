@@ -15,21 +15,30 @@ class TestDashboardService implements DashboardService {
   Future<DashboardData?> fetchDashboard() => handler();
 }
 
-Widget buildTestApp({DashboardService? service}) {
-  return MaterialApp(
-    home: Scaffold(
-      body: SingleChildScrollView(child: DashboardScreen(service: service)),
+Future<void> openDashboard(
+  WidgetTester tester, {
+  DashboardService? service,
+}) async {
+  // Menutup Dashboard setelah tes agar timer ikut dihentikan.
+  addTearDown(() async {
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(child: DashboardScreen(service: service)),
+      ),
     ),
   );
 }
 
 void main() {
   testWidgets('Dashboard menampilkan data pengujian', (tester) async {
-    await tester.pumpWidget(buildTestApp());
+    await openDashboard(tester);
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Data pengujian'), findsOneWidget);
-
     expect(find.text('Tegangan'), findsOneWidget);
     expect(find.text('Arus'), findsOneWidget);
     expect(find.text('Daya'), findsOneWidget);
@@ -52,7 +61,7 @@ void main() {
     final completer = Completer<DashboardData?>();
     final service = TestDashboardService(() => completer.future);
 
-    await tester.pumpWidget(buildTestApp(service: service));
+    await openDashboard(tester, service: service);
 
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(find.text('Memuat data...'), findsOneWidget);
@@ -66,7 +75,7 @@ void main() {
   testWidgets('Dashboard menampilkan pesan saat data kosong', (tester) async {
     final service = TestDashboardService(() async => null);
 
-    await tester.pumpWidget(buildTestApp(service: service));
+    await openDashboard(tester, service: service);
     await tester.pumpAndSettle();
 
     expect(find.text('Data monitoring belum tersedia.'), findsOneWidget);
@@ -88,7 +97,7 @@ void main() {
       return mock.fetchDashboard();
     });
 
-    await tester.pumpWidget(buildTestApp(service: service));
+    await openDashboard(tester, service: service);
     await tester.pumpAndSettle();
 
     expect(
@@ -106,5 +115,72 @@ void main() {
       find.text('Data monitoring gagal dimuat. Silakan coba lagi.'),
       findsNothing,
     );
+  });
+
+  testWidgets('Dashboard mengambil ulang setelah 60 detik', (tester) async {
+    var calls = 0;
+
+    final service = TestDashboardService(() async {
+      calls++;
+      return null;
+    });
+
+    await openDashboard(tester, service: service);
+    await tester.pump();
+
+    expect(calls, 1);
+
+    await tester.pump(const Duration(seconds: 59));
+    expect(calls, 1);
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+
+    expect(calls, 2);
+  });
+
+  testWidgets('Permintaan tidak bertumpuk saat data masih dimuat', (
+    tester,
+  ) async {
+    var calls = 0;
+    final completer = Completer<DashboardData?>();
+
+    final service = TestDashboardService(() {
+      calls++;
+      return completer.future;
+    });
+
+    await openDashboard(tester, service: service);
+
+    await tester.pump(const Duration(seconds: 60));
+    expect(calls, 1);
+
+    completer.complete(null);
+    await tester.pumpAndSettle();
+
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pump();
+
+    expect(calls, 2);
+  });
+
+  testWidgets('Timer berhenti setelah Dashboard ditutup', (tester) async {
+    var calls = 0;
+
+    final service = TestDashboardService(() async {
+      calls++;
+      return null;
+    });
+
+    await openDashboard(tester, service: service);
+    await tester.pump();
+
+    expect(calls, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(minutes: 2));
+
+    expect(calls, 1);
+    expect(tester.takeException(), isNull);
   });
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
@@ -14,22 +16,70 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   late final DashboardService _service;
   late Future<DashboardData?> _future;
+
+  Timer? _timer;
+  bool _isFetching = false;
 
   @override
   void initState() {
     super.initState();
+
+    WidgetsBinding.instance.addObserver(this);
+
     _service =
         widget.service ?? MockDashboardService(deviceId: AppConfig.deviceId);
-    _future = _service.fetchDashboard();
+
+    _future = _fetch();
+
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle == null || lifecycle == AppLifecycleState.resumed) {
+      _startTimer();
+    }
   }
 
-  void _retry() {
+  Future<DashboardData?> _fetch() async {
+    _isFetching = true;
+
+    try {
+      return await _service.fetchDashboard();
+    } finally {
+      _isFetching = false;
+    }
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+
+    _timer = Timer.periodic(AppConfig.refreshInterval, (_) => _reload());
+  }
+
+  void _reload() {
+    if (!mounted || _isFetching) return;
+
     setState(() {
-      _future = _service.fetchDashboard();
+      _future = _fetch();
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _reload();
+      _startTimer();
+    } else {
+      _timer?.cancel();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   String _formatWib(DateTime timestamp) {
@@ -62,7 +112,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             if (snapshot.hasError) {
               return AppErrorState(
                 message: 'Data monitoring gagal dimuat. Silakan coba lagi.',
-                onRetry: _retry,
+                onRetry: _reload,
               );
             }
 
@@ -75,7 +125,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     message: 'Data monitoring belum tersedia.',
                   ),
                   OutlinedButton.icon(
-                    onPressed: _retry,
+                    onPressed: _reload,
                     icon: const Icon(Icons.refresh),
                     label: const Text('Coba lagi'),
                   ),
@@ -165,6 +215,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         const SizedBox(height: 12),
         Text('Tanggal rekap energi (WIB): ${data.summaryDate}'),
+        const SizedBox(height: 8),
+        Text(
+          data.isTestData
+              ? 'Simulasi diambil ulang setiap 60 detik. '
+                    'Nilai contoh tetap sama.'
+              : 'Data diambil ulang setiap 60 detik.',
+        ),
         const SizedBox(height: 20),
         Card(
           margin: EdgeInsets.zero,
