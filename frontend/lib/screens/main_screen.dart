@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
+import 'dashboard_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -54,37 +55,40 @@ class _MainScreenState extends State<MainScreen> {
               const SizedBox(height: 8),
               Text('Perangkat: ${AppConfig.deviceId}'),
               const SizedBox(height: 24),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    children: [
-                      Icon(
-                        _icons[_selectedIndex],
-                        size: 64,
-                        color: colors.primary,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        _titles[_selectedIndex],
-                        key: const ValueKey('page-title'),
-                        style: Theme.of(context).textTheme.titleLarge,
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        _messages[_selectedIndex],
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'Kerangka tampilan — belum terhubung ke API.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
+              if (_selectedIndex == 0)
+                const DashboardScreen()
+              else
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      children: [
+                        Icon(
+                          _icons[_selectedIndex],
+                          size: 64,
+                          color: colors.primary,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          _titles[_selectedIndex],
+                          key: const ValueKey('page-title'),
+                          style: Theme.of(context).textTheme.titleLarge,
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          _messages[_selectedIndex],
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Kerangka tampilan — belum terhubung ke API.',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
