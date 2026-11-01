@@ -1,8 +1,6 @@
 
-import { handleAuth, authErrorResponse } from "./auth.js";
-import { handleDeviceReference, requireOwnedDevice } from "./device-reference.js";
+import { errorResponse, requirePrototypeDevice } from "./api.js";
 import { handlePredictions, verifyAI } from "./predictions.js";
-import { handleRecommendations } from "./recommendations.js";
 
 const SCOPES =
   "https://www.googleapis.com/auth/firebase.database " +
@@ -261,20 +259,8 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
-    if (path === "/api/v1/ai/recommendations") {
-      return handleRecommendations(request, env, firebase);
-    }
-
     if (["/api/v1/ai/predictions", "/api/v1/ai/predictions/latest", "/api/v1/ai/predictions/history"].includes(path)) {
       return handlePredictions(request, env, path, firebase);
-    }
-
-    if (path === "/api/v1/device-reference" || path.startsWith("/api/v1/device-reference/")) {
-      return handleDeviceReference(request, env, path, firebase);
-    }
-
-    if (["/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/me"].includes(path)) {
-      return handleAuth(request, env, path, firebase);
     }
 
     if (path === "/health" && request.method === "GET") {
@@ -408,10 +394,10 @@ export default {
         if (path === "/api/v1/ai/dataset") {
           await verifyAI(request, env);
         } else {
-          await requireOwnedDevice(request, env, firebase, deviceId);
+          requirePrototypeDevice(deviceId, env);
         }
       } catch (error) {
-        return authErrorResponse(error);
+        return errorResponse(error);
       }
 
       // GET: pembacaan terbaru
