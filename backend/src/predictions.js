@@ -1,7 +1,6 @@
-import { AuthError, authErrorResponse, readJsonRequest } from "./auth.js";
-import { requireOwnedDevice } from "./device-reference.js";
+import { ApiError, errorResponse, readJsonRequest, requirePrototypeDevice } from "./api.js";
 
-function fail(status, code, detail) { throw new AuthError(status, code, detail); }
+function fail(status, code, detail) { throw new ApiError(status, code, detail); }
 function json(body, status = 200) {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
@@ -68,8 +67,7 @@ export async function handlePredictions(request, env, path, firebase) {
     }
     const params = new URL(request.url).searchParams;
     const deviceId = params.get("device_id");
-    // Authenticate and authorize before querying any predictions, including for admins.
-    await requireOwnedDevice(request, env, firebase, deviceId);
+    requirePrototypeDevice(deviceId, env);
     const latest = path === `${root}/latest`;
     const start = params.get("start_date");
     const end = params.get("end_date");
@@ -93,5 +91,5 @@ export async function handlePredictions(request, env, path, firebase) {
     }
     return json({ status: "success", device_id: deviceId, start_date: start, end_date: end,
       total_predictions: data.length, data });
-  } catch (error) { return authErrorResponse(error); }
+  } catch (error) { return errorResponse(error); }
 }
