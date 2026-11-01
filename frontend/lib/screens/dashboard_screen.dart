@@ -1,45 +1,126 @@
 import 'package:flutter/material.dart';
 
-class DashboardScreen extends StatelessWidget {
-  const DashboardScreen({super.key});
+import '../config/app_config.dart';
+import '../models/dashboard_data.dart';
+import '../services/dashboard_service.dart';
+import '../widgets/app_states.dart';
+
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key, this.service});
+
+  final DashboardService? service;
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  late final DashboardService _service;
+  late Future<DashboardData?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _service =
+        widget.service ?? MockDashboardService(deviceId: AppConfig.deviceId);
+    _future = _service.fetchDashboard();
+  }
+
+  void _retry() {
+    setState(() {
+      _future = _service.fetchDashboard();
+    });
+  }
+
+  String _formatWib(DateTime timestamp) {
+    final time = timestamp.toUtc().add(const Duration(hours: 7));
+
+    String two(int value) => value.toString().padLeft(2, '0');
+
+    return '${two(time.day)}/${two(time.month)}/${time.year}, '
+        '${two(time.hour)}:${two(time.minute)} WIB';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           'Dashboard Monitoring',
           key: const ValueKey('page-title'),
-          style: textTheme.titleLarge,
+          style: Theme.of(context).textTheme.titleLarge,
         ),
         const SizedBox(height: 16),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: colors.secondaryContainer,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: const Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(Icons.science_outlined),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Data pengujian\n'
-                  'Angka di bawah hanya contoh tampilan, '
-                  'bukan pembacaan sensor atau hasil API.',
-                ),
-              ),
-            ],
-          ),
+        FutureBuilder<DashboardData?>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const AppLoading();
+            }
+
+            if (snapshot.hasError) {
+              return AppErrorState(
+                message: 'Data monitoring gagal dimuat. Silakan coba lagi.',
+                onRetry: _retry,
+              );
+            }
+
+            final data = snapshot.data;
+
+            if (data == null) {
+              return Column(
+                children: [
+                  const AppEmptyState(
+                    message: 'Data monitoring belum tersedia.',
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _retry,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Coba lagi'),
+                  ),
+                ],
+              );
+            }
+
+            return _buildData(context, data);
+          },
         ),
-        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Widget _buildData(BuildContext context, DashboardData data) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (data.isTestData) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colors.secondaryContainer,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.science_outlined),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Data pengujian\n'
+                    'Angka di bawah hanya contoh tampilan, '
+                    'bukan pembacaan sensor atau hasil API.',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+        ],
         LayoutBuilder(
           builder: (context, constraints) {
             final columns = constraints.maxWidth >= 320 ? 2 : 1;
@@ -53,28 +134,28 @@ class DashboardScreen extends StatelessWidget {
                 _MetricCard(
                   width: cardWidth,
                   label: 'Tegangan',
-                  value: '5.00',
+                  value: data.voltageV.toStringAsFixed(2),
                   unit: 'V',
                   icon: Icons.bolt_outlined,
                 ),
                 _MetricCard(
                   width: cardWidth,
                   label: 'Arus',
-                  value: '0.20',
+                  value: data.currentA.toStringAsFixed(4),
                   unit: 'A',
                   icon: Icons.electrical_services_outlined,
                 ),
                 _MetricCard(
                   width: cardWidth,
                   label: 'Daya',
-                  value: '1.00',
+                  value: data.powerW.toStringAsFixed(4),
                   unit: 'W',
                   icon: Icons.solar_power_outlined,
                 ),
                 _MetricCard(
                   width: cardWidth,
                   label: 'Energi harian',
-                  value: '0.75',
+                  value: data.totalEnergyWh.toStringAsFixed(4),
                   unit: 'Wh',
                   icon: Icons.energy_savings_leaf_outlined,
                 ),
@@ -82,25 +163,33 @@ class DashboardScreen extends StatelessWidget {
             );
           },
         ),
+        const SizedBox(height: 12),
+        Text('Tanggal rekap energi (WIB): ${data.summaryDate}'),
         const SizedBox(height: 20),
-        const Card(
+        Card(
           margin: EdgeInsets.zero,
           child: Padding(
-            padding: EdgeInsets.all(16),
+            padding: const EdgeInsets.all(16),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.schedule_outlined),
-                SizedBox(width: 12),
+                const Icon(Icons.schedule_outlined),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Waktu pembacaan contoh'),
-                      SizedBox(height: 4),
-                      Text('01 November 2026, 12:00 WIB'),
-                      SizedBox(height: 8),
-                      Text('Belum terhubung ke API.'),
+                      Text(
+                        data.isTestData
+                            ? 'Waktu pembacaan contoh'
+                            : 'Waktu pembacaan sensor',
+                      ),
+                      const SizedBox(height: 4),
+                      Text(_formatWib(data.readingTimestamp)),
+                      if (data.isTestData) ...[
+                        const SizedBox(height: 8),
+                        const Text('Belum terhubung ke API.'),
+                      ],
                     ],
                   ),
                 ),
