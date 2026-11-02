@@ -4,6 +4,7 @@ import 'config/app_config.dart';
 import 'screens/main_screen.dart';
 import 'services/api_dashboard_service.dart';
 import 'services/dashboard_service.dart';
+import 'services/history_service.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -13,14 +14,19 @@ void main() {
         baseUrl: AppConfig.apiBaseUrl,
         deviceId: AppConfig.deviceId,
       ),
+      historyService: ApiHistoryService(
+        baseUrl: AppConfig.apiBaseUrl,
+        deviceId: AppConfig.deviceId,
+      ),
     ),
   );
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key, this.dashboardService});
+  const MyApp({super.key, this.dashboardService, this.historyService});
 
   final DashboardService? dashboardService;
+  final HistoryService? historyService;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +34,10 @@ class MyApp extends StatelessWidget {
       title: AppConfig.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
-      home: MainScreen(dashboardService: dashboardService),
+      home: MainScreen(
+        dashboardService: dashboardService,
+        historyService: historyService,
+      ),
     );
   }
 }
