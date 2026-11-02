@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "build": "wrangler deploy --dry-run --outdir .wrangler/build",
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "deploy": "wrangler deploy"

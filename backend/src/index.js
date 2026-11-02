@@ -1,134 +1,14 @@
 
 import { errorResponse, requirePrototypeDevice } from "./api.js";
 import { handlePredictions, verifyAI } from "./predictions.js";
-
-const SCOPES =
-  "https://www.googleapis.com/auth/firebase.database " +
-  "https://www.googleapis.com/auth/userinfo.email";
+import { readSensorDay, insertSensor } from "./database.js";
 
 const ZONE = "Asia/Jakarta";
-const ROOT = "sensor_readings";
-
-let cachedToken = null;
-let tokenExpiresAt = 0;
 
 function json(data, status = 200) {
   return Response.json(data, {
     status,
     headers: { "Cache-Control": "no-store" }
-  });
-}
-
-function base64url(value) {
-  const bytes = typeof value === "string"
-    ? new TextEncoder().encode(value)
-    : new Uint8Array(value);
-
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-async function getFirebaseAccessToken(env) {
-  if (cachedToken && Date.now() < tokenExpiresAt) {
-    return cachedToken;
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const header = base64url(JSON.stringify({
-    alg: "RS256",
-    typ: "JWT"
-  }));
-
-  const payload = base64url(JSON.stringify({
-    iss: env.FIREBASE_CLIENT_EMAIL,
-    scope: SCOPES,
-    aud: "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600
-  }));
-
-  const input = `${header}.${payload}`;
-
-  const pem = env.FIREBASE_PRIVATE_KEY
-    .replace(/\\n/g, "\n")
-    .replace(
-      /-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g,
-      ""
-    );
-
-  const bytes = Uint8Array.from(
-    atob(pem),
-    c => c.charCodeAt(0)
-  );
-
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    bytes,
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      hash: "SHA-256"
-    },
-    false,
-    ["sign"]
-  );
-
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    new TextEncoder().encode(input)
-  );
-
-  const assertion = `${input}.${base64url(signature)}`;
-
-  const response = await fetch(
-    "https://oauth2.googleapis.com/token",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: new URLSearchParams({
-        grant_type:
-          "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        assertion
-      })
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Firebase OAuth failed: ${response.status}`);
-  }
-
-  const result = await response.json();
-
-  if (!result.access_token) {
-    throw new Error("Missing Firebase access token");
-  }
-
-  cachedToken = result.access_token;
-  tokenExpiresAt =
-    Date.now() +
-    Math.max(60, Number(result.expires_in || 3600) - 120) * 1000;
-
-  return cachedToken;
-}
-
-async function firebase(env, path, options = {}, query) {
-  const base = env.FIREBASE_DATABASE_URL.replace(/\/+$/, "");
-  const token = await getFirebaseAccessToken(env);
-
-  const suffix = query ? `?${new URLSearchParams(query)}` : "";
-  return fetch(`${base}/${path}.json${suffix}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(options.headers || {})
-    }
   });
 }
 
@@ -182,16 +62,7 @@ function round(value, decimals = 9) {
 }
 
 async function readDay(env, deviceId, date) {
-  const response = await firebase(
-    env,
-    `${ROOT}/${deviceId}/${date}`
-  );
-
-  if (!response.ok) {
-    throw new Error(`Firebase read failed: ${response.status}`);
-  }
-
-  const data = await response.json();
+  const data = await readSensorDay(env, deviceId, date);
 
   return Object.values(data || {}).filter(row =>
     row &&
@@ -260,7 +131,7 @@ export default {
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
     if (["/api/v1/ai/predictions", "/api/v1/ai/predictions/latest", "/api/v1/ai/predictions/history"].includes(path)) {
-      return handlePredictions(request, env, path, firebase);
+      return handlePredictions(request, env, path);
     }
 
     if (path === "/health" && request.method === "GET") {
@@ -341,39 +212,11 @@ export default {
         const date = dayJakarta(timestamp);
         const document_id = `${device_id}_${reading_id}`;
 
-        const response = await firebase(
-          env,
-          `${ROOT}/${device_id}/${date}/${document_id}`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              "if-match": "null_etag"
-            },
-            body: JSON.stringify({
-              reading_id,
-              device_id,
-              timestamp,
-              voltage_v,
-              current_a,
-              power_w,
-              energy_wh,
-              interval_seconds
-            })
-          }
-        );
-
-        if (response.status === 412) {
-          return json(
-            { detail: "Reading already exists" },
-            409
-          );
-        }
-
-        if (!response.ok) {
-          console.error("Firebase write:", response.status);
-          return json({ detail: "Firebase write failed" }, 502);
-        }
+        const saved = await insertSensor(env, {
+          reading_id, device_id, timestamp, voltage_v, current_a,
+          power_w, energy_wh, interval_seconds
+        }, date, document_id);
+        if (!saved) return json({ detail: "Reading already exists" }, 409);
 
         return json({
           status: "saved",
@@ -532,7 +375,7 @@ export default {
       });
 
     } catch (error) {
-      console.error("API error:", error?.message || String(error));
+      console.error("API_DATABASE_ERROR");
 
       return json(
         { detail: "Internal server error" },
