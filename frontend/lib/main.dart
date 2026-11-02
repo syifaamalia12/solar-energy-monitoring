@@ -5,6 +5,7 @@ import 'screens/main_screen.dart';
 import 'services/api_dashboard_service.dart';
 import 'services/dashboard_service.dart';
 import 'services/history_service.dart';
+import 'services/prediction_service.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -18,15 +19,25 @@ void main() {
         baseUrl: AppConfig.apiBaseUrl,
         deviceId: AppConfig.deviceId,
       ),
+      predictionService: ApiPredictionService(
+        baseUrl: AppConfig.apiBaseUrl,
+        deviceId: AppConfig.deviceId,
+      ),
     ),
   );
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key, this.dashboardService, this.historyService});
+  const MyApp({
+    super.key,
+    this.dashboardService,
+    this.historyService,
+    this.predictionService,
+  });
 
   final DashboardService? dashboardService;
   final HistoryService? historyService;
+  final PredictionService? predictionService;
 
   @override
   Widget build(BuildContext context) {
@@ -37,6 +48,7 @@ class MyApp extends StatelessWidget {
       home: MainScreen(
         dashboardService: dashboardService,
         historyService: historyService,
+        predictionService: predictionService,
       ),
     );
   }
