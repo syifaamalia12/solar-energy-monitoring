@@ -49,14 +49,19 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
   }
 
-  Future<DashboardData?> _fetch() async {
+  Future<DashboardData?> _fetch() {
     _isFetching = true;
 
-    try {
-      return await _service.fetchDashboard();
-    } finally {
-      _isFetching = false;
-    }
+    final future = Future<DashboardData?>.sync(() => _service.fetchDashboard())
+        .whenComplete(() {
+          _isFetching = false;
+        });
+
+    // Pasang penanganan segera sebelum FutureBuilder dibangun ulang.
+    // Future asli tetap dikembalikan agar data/error tampil di halaman.
+    future.ignore();
+
+    return future;
   }
 
   void _startTimer() {

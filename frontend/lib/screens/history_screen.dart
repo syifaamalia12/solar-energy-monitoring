@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:fl_chart/fl_chart.dart';
@@ -36,14 +37,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  Future<List<DailyEnergy>> _fetch() async {
-    final service = widget.service;
+  Future<List<DailyEnergy>> _fetch() {
+    final future = Future<List<DailyEnergy>>.sync(() {
+      final service = widget.service;
 
-    if (service == null) {
-      throw const HistoryApiException('Layanan riwayat belum dikonfigurasi.');
-    }
+      if (service == null) {
+        throw const HistoryApiException('Layanan riwayat belum dikonfigurasi.');
+      }
 
-    return service.fetchHistory(days: _days);
+      return service.fetchHistory(days: _days);
+    });
+
+    // Pasang penanganan segera sebelum FutureBuilder dibangun ulang.
+    // Future asli tetap dikembalikan agar data/error tampil di halaman.
+    future.ignore();
+
+    return future;
   }
 
   void _reload() {
