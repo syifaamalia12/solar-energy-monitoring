@@ -1,297 +1,132 @@
-// Prototype API regression tests: every external request is mocked.
-import { test, before, beforeEach, afterEach } from "node:test";
-import assert from "node:assert/strict";
-import worker from "../src/index.js";
-import { requirePrototypeDevice } from "../src/api.js";
-const env = { FIREBASE_CLIENT_EMAIL: "mock@example.invalid", FIREBASE_DATABASE_URL: "https://mock.invalid", IOT_API_KEY: "mock-iot", AI_API_KEY: "mock-ai", PUBLIC_DEVICE_IDS: '["solar-001","solar-002"]' };
+﻿import { test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+import worker from '../src/index.js';
+const migration = readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8');
+let sql, env;
 const originalFetch = globalThis.fetch;
-let state, calls;
-const json = (body,status=200)=>Response.json(body,{status});
-const aiHeaders={"x-api-key":env.AI_API_KEY};
-const predictionRoot="/api/v1/ai/predictions";
-const predictionInput={device_id:"solar-001",prediction_date:"2026-11-02",predicted_energy_wh:125.75};
-function prediction(date,extra={}) {return {...predictionInput,prediction_date:date,model_name:"Linear Regression",created_at:"2026-11-01T00:00:00Z",...extra};}
-function today(){return new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jakarta",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());}
-function reading(){return {reading_id:"mock-reading",device_id:"solar-001",timestamp:new Date().toISOString(),voltage_v:12,current_a:2,interval_seconds:60,power_w:24,energy_wh:0.4};}
-async function request(path,{method="GET",body,token,iot=false,headers={}}={}) {
- return worker.fetch(new Request("https://worker.invalid"+path,{method,headers:{...(body!==undefined?{"Content-Type":"application/json"}:{}),...(token?{Authorization:"Bearer "+token}:{}),...(iot?{"x-api-key":env.IOT_API_KEY}:{}),...headers},...(body!==undefined?{body:typeof body==="string"?body:JSON.stringify(body)}:{})}),env);
+const today = () => new Intl.DateTimeFormat('en-CA', { timeZone:'Asia/Jakarta', year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date());
+const sensor = (extra={}) => ({reading_id:'r1',device_id:'solar-001',timestamp:new Date().toISOString(),voltage_v:12,current_a:2,interval_seconds:60,...extra});
+const forecast = (extra={}) => ({device_id:'solar-001',prediction_date:'2026-11-03',predicted_energy_wh:125.75,...extra});
+function binding() {
+ return { prepare(query) {
+  return { bind(...values) {
+   const stmt = sql.prepare(query);
+   return { async all(){return {success:true,results:stmt.all(...values)};}, async first(){return stmt.get(...values)??null;}, async run(){const result=stmt.run(...values);return {success:true,meta:{changes:Number(result.changes)}};} };
+  }};
+ }};
 }
-before(async()=>{const k=await crypto.subtle.generateKey({name:"RSASSA-PKCS1-v1_5",modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:"SHA-256"},true,["sign","verify"]);env.FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n"+Buffer.from(await crypto.subtle.exportKey("pkcs8",k.privateKey)).toString("base64")+"\n-----END PRIVATE KEY-----";});
+async function request(path,{method='GET',body,key,headers={}}={},configuration=env) {
+ return worker.fetch(new Request('https://worker.invalid'+path,{method,headers:{...(body!==undefined?{'Content-Type':'application/json'}:{}),...(key?{'x-api-key':key}:{}),...headers},...(body!==undefined?{body:typeof body==='string'?body:JSON.stringify(body)}:{})}),configuration);
+}
+const postSensor = body => request('/api/v1/monitoring',{method:'POST',body,key:env.IOT_API_KEY});
+const postPrediction = body => request('/api/v1/ai/predictions',{method:'POST',body,key:env.AI_API_KEY});
 beforeEach(()=>{
- state={};calls=[];
- globalThis.fetch=async(input,options={})=>{
-  const url=new URL(input);const body=options.body && !(options.body instanceof URLSearchParams)?JSON.parse(options.body):null;
-  calls.push({url,options,body});
-  if(url.origin==="https://oauth2.googleapis.com")return json({access_token:"mock-oauth",expires_in:3600});
-  assert.equal(url.origin,env.FIREBASE_DATABASE_URL,"Unexpected network blocked");
-  assert.equal(options.headers.Authorization,"Bearer mock-oauth");
-  if(url.pathname.startsWith("/devices/"))return json(state.device??null,state.deviceFail?503:200);
-  if(url.pathname.startsWith("/energy_predictions/")){
-   if(state.predictionFail)return json({},503);
-   if(state.predictionNetworkFail)throw new Error("private upstream details");
-   const parts=url.pathname.replace(/\.json$/,'').split('/');
-   assert.ok(["solar-001", "solar-002"].includes(parts[2]));
-   if(options.method==="PUT") {assert.equal(options.headers["if-match"],"null_etag");state.predictions??={};if(state.predictions[parts[3]])return json({},412);state.predictions[parts[3]]=body;return json(body);}
-   assert.equal(url.searchParams.get("orderBy"),'"$key"');
-   let entries=Object.entries(state.predictionsByDevice?.[parts[2]] ?? state.predictions ?? {}).sort(([a],[b])=>a.localeCompare(b));
-   if(url.searchParams.has("limitToLast")){assert.equal(url.searchParams.get("limitToLast"),"1");entries=entries.slice(-1);}
-   else {const start=JSON.parse(url.searchParams.get("startAt")),end=JSON.parse(url.searchParams.get("endAt"));entries=entries.filter(([d])=>d>=start&&d<=end);}
-   return json(Object.fromEntries(entries));
-  }
-  if(url.pathname.startsWith("/sensor_readings/")){
-   if(options.method==="PUT"){state.sensorWrite={path:url.pathname,body,headers:options.headers};return json({},state.sensorStatus||200);}
-   if(state.sensorFail)return json({},503);
-   const date=url.pathname.split('/')[3]?.replace('.json','');
-   const deviceId = url.pathname.split('/')[2];
-   return json(!state.empty&&date===today()?{reading:{...reading(), device_id:deviceId}}:null);
-  }
-  throw new Error("Unexpected database access blocked");
- };
+ sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');sql.exec(migration);
+ sql.prepare('INSERT INTO devices(device_id) VALUES (?), (?)').run('solar-001','solar-002');
+ env={DB:binding(),IOT_API_KEY:'mock-iot',AI_API_KEY:'mock-ai',PUBLIC_DEVICE_IDS:'["solar-001","solar-002"]'};
+ globalThis.fetch=async()=>{throw new Error('Network forbidden in tests');};
 });
-afterEach(()=>{globalThis.fetch=originalFetch;});
+afterEach(()=>{sql.close();globalThis.fetch=originalFetch;});
 
-test("predictions: AI stores actual-energy Wh forecast using compatible contract", async () => {
-  state.device = { device_id: "solar-001" };
-  const response = await request(predictionRoot, { method: "POST", headers: aiHeaders, body: predictionInput });
-  assert.equal(response.status, 201);
-  const result = await response.json();
-  assert.equal(result.status, "saved");
-  assert.equal(result.data.predicted_energy_wh, 125.75);
-  assert.equal(result.data.model_name, "Linear Regression");
-  assert.equal(result.data.device_id, "solar-001");
-  assert.equal(result.data.prediction_date, "2026-11-02");
-  assert.deepEqual(state.predictions["2026-11-02"], result.data);
-  assert.deepEqual(Object.keys(result.data).sort(), ["created_at", "device_id", "model_name", "predicted_energy_wh", "prediction_date"]);
+test('health is public and independent of D1',async()=>{assert.equal((await request('/health',{},{})).status,200);});
+test('sensor insert preserves W/Wh, original timestamp and JSON fields',async()=>{
+ const body=sensor();const r=await postSensor(body);assert.equal(r.status,200);
+ assert.deepEqual(await r.json(),{status:'saved',document_id:'solar-001_r1',power_w:24,energy_wh:0.4});
+ const saved=sql.prepare('SELECT * FROM sensor_readings').get();assert.equal(saved.timestamp,body.timestamp);assert.equal(saved.reading_date,today());
+ const latest=await (await request('/api/v1/monitoring/latest')).json();
+ assert.deepEqual(latest.data,{...body,power_w:24,energy_wh:0.4});
+ assert.equal(latest.data.timestamp_ms,undefined);
 });
-
-test("predictions: duplicate and simultaneous writes cannot overwrite device/date", async () => {
-  state.device = { device_id: "solar-001" };
-  const responses = await Promise.all([1, 2].map(() => request(predictionRoot, { method: "POST", headers: aiHeaders, body: predictionInput })));
-  assert.deepEqual(responses.map(r => r.status).sort(), [201, 409]);
-  const original = structuredClone(state.predictions);
-  assert.equal((await request(predictionRoot, { method: "POST", headers: aiHeaders, body: { ...predictionInput, predicted_energy_wh: 999 } })).status, 409);
-  assert.deepEqual(state.predictions, original);
+test('duplicate and simultaneous sensor inserts cannot overwrite',async()=>{
+ const responses=await Promise.all([postSensor(sensor()),postSensor(sensor())]);assert.deepEqual(responses.map(r=>r.status).sort(),[200,409]);
+ assert.equal((await postSensor(sensor({voltage_v:99}))).status,409);assert.equal(sql.prepare('SELECT power_w FROM sensor_readings').get().power_w,24);
 });
-
-test("predictions: latest uses greatest prediction date and excludes private fields", async () => {
-  state.device = { device_id: "solar-001" };
-  state.predictions = { "2026-11-01": prediction("2026-11-01"), "2026-11-03": prediction("2026-11-03", { private: "hidden" }), "2026-11-02": prediction("2026-11-02") };
-  const response = await request(`${predictionRoot}/latest?device_id=solar-001`);
-  assert.equal(response.status, 200);
-  const result = await response.json();
-  assert.equal(result.status, "success");
-  assert.equal(result.data.prediction_date, "2026-11-03");
-  assert.equal(result.data.private, undefined);
+test('sensor duplicate scope remains per device and WIB day',async()=>{
+ for(const body of [sensor({timestamp:'2026-11-01T16:59:00Z'}),sensor({timestamp:'2026-11-01T17:00:00Z'}),sensor({device_id:'solar-002',timestamp:'2026-11-01T17:00:00Z'})]) assert.equal((await postSensor(body)).status,200);
+ assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM sensor_readings').get().n,3);
 });
-
-test("predictions: history is inclusive, ordered and limited to requested date range", async () => {
-  state.device = { device_id: "solar-001" };
-  state.predictions = Object.fromEntries(["2026-11-03", "2026-11-01", "2026-11-02", "2026-10-31"].map(date => [date, prediction(date)]));
-  const response = await request(`${predictionRoot}/history?device_id=solar-001&start_date=2026-11-01&end_date=2026-11-02`);
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: "success", device_id: "solar-001", start_date: "2026-11-01", end_date: "2026-11-02", total_predictions: 2,
-    data: [prediction("2026-11-01"), prediction("2026-11-02")] });
+test('WIB boundary aggregation and no cumulative energy double counting',async()=>{
+ await postSensor(sensor({reading_id:'before',timestamp:'2026-11-01T16:59:00Z'}));
+ await postSensor(sensor({reading_id:'after',timestamp:'2026-11-01T17:00:00Z',voltage_v:6}));
+ for(const [date,energy] of [['2026-11-01',0.4],['2026-11-02',0.2]]){
+ const result=await (await request('/api/v1/monitoring/daily-summary?date='+date)).json();assert.equal(result.data.total_energy_wh,energy);assert.equal(result.data.reading_count,1);assert.equal(result.timezone,'Asia/Jakarta');}
 });
-
-test("predictions: missing device/latest yields 404; empty history yields empty array", async () => {
-  assert.equal((await request(predictionRoot, { method: "POST", headers: aiHeaders, body: predictionInput })).status, 404);
-  state.device = { device_id: "solar-001" };
-  assert.equal((await request(`${predictionRoot}/latest?device_id=solar-001`)).status, 404);
-  const response = await request(`${predictionRoot}/history?device_id=solar-001&start_date=2026-11-01&end_date=2026-11-01`);
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).total_predictions, 0);
+test('all four monitoring GETs stay public and keep response shapes',async()=>{
+ await postSensor(sensor());
+ for(const path of ['latest','history','daily-summary','daily-history']){
+ const r=await request('/api/v1/monitoring/'+path);assert.equal(r.status,200);const body=await r.json();assert.equal(body.device_id,'solar-001');
+ if(path==='history')assert.equal(body.count,1);if(path==='daily-history'){assert.equal(body.data[0].total_energy_wh,0.4);assert.equal(body.data[0].avg_power_w,24);}}
 });
-
-test("predictions: POST rejects IoT key, user/admin JWT and missing/wrong AI key", async () => {
-  state.device = { device_id: "solar-001" };
-  for (const options of [{}, { iot: true }, { headers: { "x-api-key": "wrong" } }]) {
-    assert.equal((await request(predictionRoot, { method: "POST", body: predictionInput, ...options })).status, 401);
-  }
-  assert.ok(!calls.some(c => c.url.pathname.startsWith("/energy_predictions/")));
+test('monitoring history sorts real instants across timestamp offsets and respects limit',async()=>{
+ const d=today();await postSensor(sensor({reading_id:'early',timestamp:d+'T01:00:00Z'}));await postSensor(sensor({reading_id:'late',timestamp:d+'T09:00:00+07:00'}));
+ const result=await (await request('/api/v1/monitoring/history?limit=1')).json();assert.equal(result.count,1);assert.equal(result.data[0].reading_id,'late');
 });
-
-test("predictions: absent or reused AI secret fails closed", async () => {
-  const invoke = AI_API_KEY => worker.fetch(new Request(`https://worker.invalid${predictionRoot}`, { method: "POST", headers: aiHeaders }), { ...env, AI_API_KEY });
-  assert.equal((await invoke(undefined)).status, 503);
-  assert.equal((await invoke(env.IOT_API_KEY)).status, 503);
-  assert.equal(calls.length, 0);
+test('empty monitoring retains null/zero/empty responses',async()=>{
+ assert.equal((await (await request('/api/v1/monitoring/latest')).json()).data,null);
+ assert.equal((await (await request('/api/v1/monitoring/history')).json()).count,0);
+ assert.equal((await (await request('/api/v1/monitoring/daily-summary')).json()).data.total_energy_wh,0);
+ assert.equal((await (await request('/api/v1/monitoring/daily-history')).json()).count,0);
 });
-
-test("predictions: invalid input including negative/nonfinite energy and unsafe IDs", async () => {
-  for (const body of [null, [], {}, { ...predictionInput, device_id: "bad/id" }, { ...predictionInput, prediction_date: "2026-02-30" },
-    { ...predictionInput, prediction_date: "0000-01-01" }, { ...predictionInput, predicted_energy_wh: -1 },
-    { ...predictionInput, predicted_energy_wh: true }, { ...predictionInput, predicted_energy_wh: "10" },
-    '{"device_id":"solar-001","prediction_date":"2026-11-02","predicted_energy_wh":1e400}',
-    { ...predictionInput, model_name: " " }, { ...predictionInput, owner_uid: "untrusted-uid" }]) {
-    assert.equal((await request(predictionRoot, { method: "POST", headers: aiHeaders, body })).status, 422);
-  }
-  assert.ok(!calls.some(c => c.options.method === "PUT"));
+test('IoT and AI credentials remain separate',async()=>{
+ for(const key of [undefined,'wrong',env.AI_API_KEY])assert.equal((await request('/api/v1/monitoring',{method:'POST',body:sensor(),key})).status,401);
+ for(const key of [undefined,'wrong',env.IOT_API_KEY]){assert.equal((await request('/api/v1/ai/dataset',{key})).status,401);assert.equal((await request('/api/v1/ai/predictions',{method:'POST',key,body:forecast()})).status,401);}
+ assert.equal((await request('/api/v1/ai/dataset',{key:env.AI_API_KEY},{...env,AI_API_KEY:env.IOT_API_KEY})).status,503);
 });
-
-test("predictions: zero energy and explicit model name are accepted", async () => {
-  state.device = { device_id: "solar-001" };
-  const response = await request(predictionRoot, { method: "POST", headers: aiHeaders, body: { ...predictionInput, predicted_energy_wh: 0, model_name: "Linear Regression v2" } });
-  assert.equal(response.status, 201);
-  assert.equal((await response.json()).data.predicted_energy_wh, 0);
+test('dataset keeps daily Wh target and per-device isolation',async()=>{
+ await postSensor(sensor());await postSensor(sensor({device_id:'solar-002',voltage_v:6}));
+ const r=await request('/api/v1/ai/dataset?device_id=solar-002',{key:env.AI_API_KEY});assert.equal(r.status,200);
+ const body=await r.json();assert.equal(body.target,'next_day_energy_wh');assert.equal(body.data[0].energy_wh,0.2);assert.equal(body.data[0].reading_count,1);
 });
-
-test("predictions: history rejects bad dates, reversed/oversized ranges and accepts 31 days", async () => {
-  state.device = { device_id: "solar-001" };
-  for (const [query, status] of [["", 422], ["&start_date=2026-02-30&end_date=2026-03-01", 422],
-    ["&start_date=2026-11-02&end_date=2026-11-01", 400], ["&start_date=2026-10-01&end_date=2026-11-01", 400],
-    ["&start_date=2026-10-01&end_date=2026-10-31", 200]]) {
-    assert.equal((await request(`${predictionRoot}/history?device_id=solar-001${query}`)).status, status);
-  }
-  assert.equal((await request(`${predictionRoot}/latest`)).status, 422);
-  assert.equal((await request(`${predictionRoot}/latest?device_id=bad.id`)).status, 422);
+test('predictions write and latest preserve old JSON contract',async()=>{
+ const r=await postPrediction(forecast());assert.equal(r.status,201);const saved=(await r.json()).data;assert.equal(saved.model_name,'Linear Regression');
+ assert.deepEqual(await (await request('/api/v1/ai/predictions/latest?device_id=solar-001')).json(),{status:'success',data:saved});
 });
-
-test("predictions: upstream failures and corrupt stored predictions fail safely", async () => {
-  state.device = { device_id: "solar-001" };
-  state.predictionFail = true;
-  assert.equal((await request(predictionRoot, { method: "POST", headers: aiHeaders, body: predictionInput })).status, 503);
-  assert.equal((await request(`${predictionRoot}/latest?device_id=solar-001`)).status, 503);
-  state.predictionFail = false;
-  state.predictionNetworkFail = true;
-  const response = await request(`${predictionRoot}/latest?device_id=solar-001`);
-  assert.equal(response.status, 503);
-  assert.ok(!(await response.text()).includes("private upstream"));
-  state.predictionNetworkFail = false;
-  state.predictions = { "2026-11-02": prediction("2026-11-02", { device_id: "other-device" }) };
-  assert.equal((await request(`${predictionRoot}/latest?device_id=solar-001`)).status, 503);
+test('predictions duplicates are atomic and never overwrite',async()=>{
+ const responses=await Promise.all([postPrediction(forecast()),postPrediction(forecast({predicted_energy_wh:99}))]);assert.deepEqual(responses.map(r=>r.status).sort(),[201,409]);
+ assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM energy_predictions').get().n,1);
 });
-
-test("predictions: request size, JSON, media type and HTTP method are enforced", async () => {
-  for (const [body, headers, status] of [["{", aiHeaders, 400], [predictionInput, { ...aiHeaders, "Content-Type": "text/plain" }, 415],
-    [{ ...predictionInput, model_name: "x".repeat(5000) }, aiHeaders, 413]]) {
-    assert.equal((await request(predictionRoot, { method: "POST", body, headers })).status, status);
-  }
-  assert.equal((await request(predictionRoot)).status, 405);
-  assert.equal((await request(`${predictionRoot}/latest`, { method: "POST" })).status, 405);
-  assert.equal((await request(`${predictionRoot}/history`, { method: "POST" })).status, 405);
+test('prediction history is inclusive, ordered, isolated and latest uses greatest date',async()=>{
+ for(const date of ['2026-11-03','2026-11-01','2026-11-02'])await postPrediction(forecast({prediction_date:date}));
+ await postPrediction(forecast({device_id:'solar-002',predicted_energy_wh:3}));
+ const body=await (await request('/api/v1/ai/predictions/history?device_id=solar-001&start_date=2026-11-01&end_date=2026-11-02')).json();
+ assert.equal(body.total_predictions,2);assert.deepEqual(body.data.map(r=>r.prediction_date),['2026-11-01','2026-11-02']);
+ assert.equal((await (await request('/api/v1/ai/predictions/latest?device_id=solar-001')).json()).data.prediction_date,'2026-11-03');
 });
-
-const publicMonitoring = ["/api/v1/monitoring/latest", "/api/v1/monitoring/history", "/api/v1/monitoring/daily-summary", "/api/v1/monitoring/daily-history"];
-test("prototype: all monitoring GETs work without user credentials and preserve JSON", async () => {
-  for (const path of publicMonitoring) {
-    const response = await request(path);
-    assert.equal(response.status, 200, path);
-    const result = await response.json();
-    assert.equal(result.device_id, "solar-001");
-    if (path.endsWith("/latest")) assert.equal(result.data.power_w, 24);
-    else if (path.endsWith("/daily-summary")) assert.equal(result.data.total_energy_wh, 0.4);
-    else { assert.equal(result.count, 1); assert.equal(result.data[0].energy_wh ?? result.data[0].total_energy_wh, 0.4); }
-  }
+test('prediction empty and missing device handling',async()=>{
+ assert.equal((await postPrediction(forecast({device_id:'missing'}))).status,404);
+ assert.equal((await request('/api/v1/ai/predictions/latest?device_id=solar-001')).status,404);
+ const body=await (await request('/api/v1/ai/predictions/history?device_id=solar-001&start_date=2026-11-01&end_date=2026-11-02')).json();assert.deepEqual(body.data,[]);assert.equal(body.total_predictions,0);
 });
-test("prototype: public predictions do not require Firebase Auth or owner metadata", async () => {
-  state.predictions = { "2026-11-02": prediction("2026-11-02") };
-  assert.equal((await request(`${predictionRoot}/latest?device_id=solar-001`)).status, 200);
-  assert.equal((await request(`${predictionRoot}/history?device_id=solar-001&start_date=2026-11-01&end_date=2026-11-02`)).status, 200);
-  assert.ok(!calls.some(c => c.url.pathname.startsWith("/users/") || c.url.pathname.startsWith("/devices/") || c.url.hostname === "identitytoolkit.googleapis.com"));
+test('public allowlist denies unknown/injection IDs and malformed config',async()=>{
+ for(const path of ['/api/v1/monitoring/latest','/api/v1/monitoring/history','/api/v1/monitoring/daily-summary','/api/v1/monitoring/daily-history','/api/v1/ai/predictions/latest','/api/v1/ai/predictions/history']){
+ assert.equal((await request(path+'?device_id=private')).status,404);assert.equal((await request(path+'?device_id=bad.id')).status,422);
+ assert.equal((await request(path+'?device_id=solar-001',{}, {...env,PUBLIC_DEVICE_IDS:'broken'})).status,503);
+ assert.equal((await request(path+'?device_id=solar-001',{}, {...env,PUBLIC_DEVICE_IDS:'[]'})).status,404);}
 });
-test("prototype: public access rejects devices outside configured allowlist", async () => {
-  for (const path of [...publicMonitoring, `${predictionRoot}/latest`, `${predictionRoot}/history`]) {
-    assert.equal((await request(`${path}?device_id=other-device`)).status, 404);
-    assert.equal((await request(`${path}?device_id=bad.id`)).status, 422);
-  }
-  assert.equal(calls.length, 0);
+test('public multi-device reads do not mix sensor rows',async()=>{
+ await postSensor(sensor());await postSensor(sensor({device_id:'solar-002',voltage_v:6}));
+ for(const id of ['solar-001','solar-002']){const body=await (await request('/api/v1/monitoring/latest?device_id='+id)).json();assert.equal(body.data.device_id,id);assert.equal(body.data.power_w,id==='solar-001'?24:12);}
 });
-test("prototype: every public GET supports multiple configured devices without mixing data", async () => {
-  state.predictionsByDevice = Object.fromEntries(["solar-001", "solar-002"].map((id, i) => [id,
-    { "2026-11-02": prediction("2026-11-02", { device_id: id, predicted_energy_wh: 100 + i }) }]));
-  for (const id of ["solar-001", "solar-002"]) {
-    for (const path of publicMonitoring) {
-      const response = await request(`${path}?device_id=${id}`);
-      assert.equal(response.status, 200, path);
-      const result = await response.json();
-      assert.equal(result.device_id, id);
-      if (path.endsWith("/latest")) assert.equal(result.data.device_id, id);
-      if (path.endsWith("/history")) assert.ok(result.data.every(row => row.device_id === id));
-    }
-    for (const suffix of ["latest", "history"]) {
-      const response = await request(`${predictionRoot}/${suffix}?device_id=${id}&start_date=2026-11-01&end_date=2026-11-02`);
-      assert.equal(response.status, 200);
-      const result = await response.json();
-      const rows = Array.isArray(result.data) ? result.data : [result.data];
-      assert.ok(rows.every(row => row.device_id === id));
-      assert.equal(rows[0].predicted_energy_wh, id === "solar-001" ? 100 : 101);
-    }
-  }
+test('invalid inputs, request limits and query ranges remain rejected',async()=>{
+ for(const body of [{},sensor({voltage_v:-1}),sensor({interval_seconds:0}),sensor({device_id:'a/b'}),sensor({timestamp:'bad'})])assert.equal((await postSensor(body)).status,422);
+ for(const body of [{},forecast({predicted_energy_wh:-1}),forecast({predicted_energy_wh:true}),forecast({prediction_date:'2026-02-30'}),forecast({device_id:'a/b'})])assert.equal((await postPrediction(body)).status,422);
+ assert.equal((await postPrediction(forecast({model_name:'x'.repeat(5000)}))).status,413);
+ assert.equal((await request('/api/v1/monitoring/history?limit=0')).status,422);
+ assert.equal((await request('/api/v1/monitoring/daily-summary?date=bad')).status,422);
+ assert.equal((await request('/api/v1/ai/dataset?days=31',{key:env.AI_API_KEY})).status,422);
+ for(const [start,end,status]of [['2026-11-02','2026-11-01',400],['2026-10-01','2026-11-01',400],['2026-10-01','2026-10-31',200],['bad','2026-11-01',422]])assert.equal((await request(`/api/v1/ai/predictions/history?device_id=solar-001&start_date=${start}&end_date=${end}`)).status,status);
 });
-test("prototype: allowlist is exact, server-configured and fails closed on invalid config", async () => {
-  assert.doesNotThrow(() => requirePrototypeDevice("solar-001", {}));
-  assert.throws(() => requirePrototypeDevice("solar-002", {}), e => e.status === 404);
-  for (const config of ["not-json", "null", '{}', '["bad/id"]', '[123]', '"solar-001"']) {
-    assert.throws(() => requirePrototypeDevice("solar-001", { PUBLIC_DEVICE_IDS: config }), e => e.status === 503);
-  }
-  assert.throws(() => requirePrototypeDevice("solar-001", { PUBLIC_DEVICE_IDS: "[]" }), e => e.status === 404);
-  assert.throws(() => requirePrototypeDevice("solar-00", env), e => e.status === 404);
-  assert.throws(() => requirePrototypeDevice("SOLAR-001", env), e => e.status === 404);
-  for (const path of publicMonitoring) {
-    assert.equal((await request(`${path}?device_id=other-device&PUBLIC_DEVICE_IDS=[%22other-device%22]`)).status, 404);
-  }
-  assert.equal(calls.length, 0);
+test('removed routes stay absent and wrong methods remain rejected',async()=>{
+ for(const path of ['/api/v1/auth/login','/api/v1/auth/register','/api/v1/auth/me','/api/v1/ai/recommendations','/api/v1/device-reference'])assert.equal((await request(path)).status,404);
+ assert.equal((await request('/api/v1/monitoring/latest',{method:'POST'})).status,405);assert.equal((await request('/api/v1/ai/predictions')).status,405);
 });
-test("prototype: invalid and empty allowlists reject public reads before Firebase", async () => {
-  for (const path of [...publicMonitoring, `${predictionRoot}/latest`, `${predictionRoot}/history`]) {
-    const input = new Request(`https://worker.invalid${path}?device_id=solar-001`);
-    assert.equal((await worker.fetch(input, { ...env, PUBLIC_DEVICE_IDS: "broken" })).status, 503);
-    assert.equal((await worker.fetch(input, { ...env, PUBLIC_DEVICE_IDS: "[]" })).status, 404);
-  }
-  assert.equal(calls.length, 0);
+test('database failures are sanitized without credentials or SQL disclosure',async()=>{
+ const broken={...env,DB:{prepare(){throw new Error('private SQL details');}}};
+ const r=await request('/api/v1/ai/predictions/latest?device_id=solar-001',{},broken);assert.equal(r.status,503);assert.ok(!(await r.text()).includes('private SQL'));
 });
-test("removed auth, reference and recommendation endpoints return 404 without database access", async () => {
-  for (const path of ["/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/me", "/api/v1/device-reference", "/api/v1/device-reference/lamp", "/api/v1/ai/recommendations"]) {
-    for (const method of ["GET", "POST"]) assert.equal((await request(path, { method, iot: true })).status, 404);
-  }
-  assert.equal(calls.length, 0);
-});
-test("sensor POST remains protected and ignores client ownership fields", async () => {
-  for (const options of [{}, { token: "old-token" }, { headers: aiHeaders }]) {
-    assert.equal((await request("/api/v1/monitoring", { method: "POST", body: reading(), ...options })).status, 401);
-  }
-  assert.equal((await request("/api/v1/monitoring", { method: "POST", iot: true, body: { ...reading(), owner_uid: "attacker" } })).status, 200);
-  assert.equal(state.sensorWrite.body.owner_uid, undefined);
-});
-test("AI dataset remains private to AI key and keeps JSON format", async () => {
-  for (const options of [{}, { iot: true }, { token: "old-token" }]) assert.equal((await request("/api/v1/ai/dataset", options)).status, 401);
-  const response = await request("/api/v1/ai/dataset", { headers: aiHeaders });
-  assert.equal(response.status, 200);
-  const result = await response.json();
-  assert.equal(result.target, "next_day_energy_wh");
-  assert.equal(result.data[0].energy_wh, 0.4);
-});
-test("monitoring validation, empty results and method errors remain compatible", async () => {
-  for (const path of ["/api/v1/monitoring/history?limit=0", "/api/v1/monitoring/daily-summary?date=bad", "/api/v1/monitoring/daily-history?days=31"]) assert.equal((await request(path)).status, 422);
-  assert.equal((await request("/api/v1/ai/dataset?days=31", { headers: aiHeaders })).status, 422);
-  assert.equal((await request("/api/v1/monitoring", { method: "POST", body: {}, iot: true })).status, 422);
-  assert.equal((await request("/api/v1/monitoring", { method: "POST", body: "{", iot: true })).status, 400);
-  for (const path of publicMonitoring) assert.equal((await request(path, { method: "POST" })).status, 405);
-  state.empty = true;
-  assert.equal((await (await request(publicMonitoring[0])).json()).data, null);
-  assert.equal((await (await request(publicMonitoring[1])).json()).count, 0);
-  assert.equal((await (await request(publicMonitoring[2])).json()).data.total_energy_wh, 0);
-  assert.equal((await (await request(publicMonitoring[3])).json()).count, 0);
-});
-test("Firebase access uses server OAuth only and never reads removed user nodes", async () => {
-  await request(publicMonitoring[0]);
-  assert.ok(calls.some(c => c.url.origin === env.FIREBASE_DATABASE_URL));
-  assert.ok(calls.filter(c => c.url.origin === env.FIREBASE_DATABASE_URL).every(c => c.options.headers.Authorization === "Bearer mock-oauth"));
-  assert.ok(!calls.some(c => /\/(users|usernames|recommendations|device_reference)(\/|\.json)/.test(c.url.pathname)));
-});
-test("regression: health remains public", async () => {
-  const response = await request("/health");
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).status, "ok");
-  assert.equal(calls.length, 0);
-});
-
-test("regression: monitoring POST calculation, storage path and duplicate behavior", async () => {
-  const response = await request("/api/v1/monitoring", { method: "POST", body: reading(), iot: true });
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: "saved", document_id: "solar-001_mock-reading", power_w: 24, energy_wh: 0.4 });
-  assert.equal(state.sensorWrite.path, `/sensor_readings/solar-001/${today()}/solar-001_mock-reading.json`);
-  assert.equal(state.sensorWrite.headers["if-match"], "null_etag");
-  state.sensorStatus = 412;
-  assert.equal((await request("/api/v1/monitoring", { method: "POST", body: reading(), iot: true })).status, 409);
+test('SQL constraints reject invalid values and foreign prediction devices',()=>{
+ assert.throws(()=>sql.prepare('INSERT INTO energy_predictions VALUES (?,?,?,?,?)').run('missing','2026-11-03',1,'Linear Regression','2026-11-02'));
+ assert.throws(()=>sql.prepare('INSERT INTO energy_predictions VALUES (?,?,?,?,?)').run('solar-001','2026-11-03',-1,'Linear Regression','2026-11-02'));
 });

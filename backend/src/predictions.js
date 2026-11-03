@@ -1,3 +1,4 @@
+import { findDevice, insertPrediction, readPredictions } from "./database.js";
 import { ApiError, errorResponse, readJsonRequest, requirePrototypeDevice } from "./api.js";
 
 function fail(status, code, detail) { throw new ApiError(status, code, detail); }
@@ -34,7 +35,7 @@ function publicPrediction(row, deviceId, date) {
     model_name: row.model_name, created_at: row.created_at };
 }
 
-export async function handlePredictions(request, env, path, firebase) {
+export async function handlePredictions(request, env, path) {
   try {
     const root = "/api/v1/ai/predictions";
     const create = path === root;
@@ -49,20 +50,15 @@ export async function handlePredictions(request, env, path, firebase) {
           (data.model_name !== undefined && (typeof data.model_name !== "string" || !data.model_name.trim() || data.model_name.length > 100))) {
         fail(422, "INVALID_PREDICTION", "Data prediksi tidak valid");
       }
-      const deviceResponse = await firebase(env, `devices/${data.device_id}`);
-      if (!deviceResponse.ok) fail(503, "DEVICE_UNAVAILABLE", "Data perangkat sementara tidak tersedia");
-      const device = await deviceResponse.json();
-      if (!device || typeof device !== "object" || Array.isArray(device)) fail(404, "DEVICE_NOT_FOUND", "Perangkat tidak terdaftar");
+      const device = await findDevice(env, data.device_id);
+      if (!device) fail(404, "DEVICE_NOT_FOUND", "Perangkat tidak terdaftar");
       // Forecast of next-day actual daily energy in Wh, supplied by the AI division.
       // Dates remain explicit to support delayed jobs/backfills; no panel-capacity calculation.
       const payload = { device_id: data.device_id, prediction_date: data.prediction_date,
         predicted_energy_wh: data.predicted_energy_wh, model_name: data.model_name?.trim() ?? "Linear Regression",
         created_at: new Date().toISOString() };
-      const response = await firebase(env, `energy_predictions/${data.device_id}/${data.prediction_date}`, {
-        method: "PUT", headers: { "Content-Type": "application/json", "if-match": "null_etag" }, body: JSON.stringify(payload)
-      });
-      if (response.status === 412) fail(409, "PREDICTION_EXISTS", "Prediksi untuk tanggal ini sudah tersedia");
-      if (!response.ok) fail(503, "PREDICTION_UNAVAILABLE", "Gagal menyimpan hasil prediksi");
+      const saved = await insertPrediction(env, payload);
+      if (!saved) fail(409, "PREDICTION_EXISTS", "Prediksi untuk tanggal ini sudah tersedia");
       return json({ status: "saved", data: payload }, 201);
     }
     const params = new URL(request.url).searchParams;
@@ -76,15 +72,8 @@ export async function handlePredictions(request, env, path, firebase) {
       if (start > end) fail(400, "INVALID_DATE_RANGE", "start_date tidak boleh melebihi end_date");
       if ((Date.parse(end) - Date.parse(start)) / 86400000 > 30) fail(400, "INVALID_DATE_RANGE", "Rentang tanggal maksimal 31 hari");
     }
-    const query = latest ? { orderBy: JSON.stringify("$key"), limitToLast: "1" } :
-      { orderBy: JSON.stringify("$key"), startAt: JSON.stringify(start), endAt: JSON.stringify(end) };
-    const response = await firebase(env, `energy_predictions/${deviceId}`, {}, query);
-    if (!response.ok) fail(503, "PREDICTION_UNAVAILABLE", "Gagal mengambil hasil prediksi");
-    const records = await response.json();
-    if (records !== null && (typeof records !== "object" || Array.isArray(records))) {
-      fail(503, "INVALID_PREDICTION_DATA", "Data prediksi memerlukan pemeriksaan administrator");
-    }
-    const data = Object.keys(records || {}).sort().map(date => publicPrediction(records[date], deviceId, date));
+    const records = await readPredictions(env, deviceId, latest ? undefined : start, latest ? undefined : end);
+    const data = records.map(row => publicPrediction(row, deviceId, row.prediction_date));
     if (latest) {
       if (!data.length) fail(404, "PREDICTION_NOT_FOUND", "Belum ada hasil prediksi");
       return json({ status: "success", data: data.at(-1) });

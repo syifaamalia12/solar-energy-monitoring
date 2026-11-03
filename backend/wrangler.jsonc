@@ -1,9 +1,21 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "solar-cloudflare-api",
-  "main": "src/index.js",
-  "compatibility_date": "2026-10-23",
-  "observability": {
-    "enabled": true
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "solar-cloudflare-api",
+	"main": "src/index.js",
+	"compatibility_date": "2026-10-23",
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "solar-energy-monitoring",
+			// Local-only placeholder. Replace with the ID returned by `wrangler d1 create` before remote use.
+			"database_id": "44e64c10-8efd-4036-8bc9-fb1bb33577ec",
+			"migrations_dir": "migrations"
+		}
+	],
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"PUBLIC_DEVICE_IDS": "[\"solar-001\",\"solar-002\"]"
+	}
 }
