@@ -50,7 +50,7 @@ Jika belum diatur, default adalah `["solar-001"]`. Array kosong menolak seluruh 
 
 Daftar tersebut membatasi GET monitoring dan GET prediksi. Daftar ini tidak membuat perangkat baru dan tidak menggantikan autentikasi API IoT/AI. Konfigurasi `FIREBASE_*`, Firebase ID Token, dan Firebase SDK tidak digunakan lagi. Variabel Firebase pada `.dev.vars` lokal sudah dilepas; secret remote lama belum dihapus.
 
-## Sepuluh endpoint aktif
+## Dua belas endpoint aktif
 
 Path relatif terhadap URL Worker. Endpoint terlindungi memakai header `x-api-key`.
 
@@ -59,17 +59,147 @@ Path relatif terhadap URL Worker. Endpoint terlindungi memakai header `x-api-key
 | GET | `/health` | Publik | — |
 | POST | `/api/v1/monitoring` | `IOT_API_KEY` | — |
 | GET | `/api/v1/monitoring/latest` | Perangkat publik | `device_id` |
-| GET | `/api/v1/monitoring/history` | Perangkat publik | `device_id`, `limit` default 100, maks. 1000 |
+| GET | `/api/v1/monitoring/history` | Perangkat publik | `device_id`, `date` opsional, `limit` default 100/maks. 1000, `offset` default 0 |
 | GET | `/api/v1/monitoring/daily-summary` | Perangkat publik | `device_id`, `date` default hari ini WIB |
-| GET | `/api/v1/monitoring/daily-history` | Perangkat publik | `device_id`, `days` default 30, maks. 30 |
+| GET | `/api/v1/monitoring/daily-history` | Perangkat publik | `device_id`, `days` default 30/maks. 30, atau `start_date` dan `end_date` |
+| GET | `/api/v1/monitoring/hourly-summary` | Perangkat publik | `device_id`, `date` wajib |
+| GET | `/api/v1/monitoring/period-summary` | Perangkat publik | `device_id`, `start_date`, `end_date` wajib |
 | GET | `/api/v1/ai/dataset` | `AI_API_KEY` | `device_id`, `days` default 14, maks. 30 |
 | POST | `/api/v1/ai/predictions` | `AI_API_KEY` | — |
 | GET | `/api/v1/ai/predictions/latest` | Perangkat publik | `device_id` wajib |
 | GET | `/api/v1/ai/predictions/history` | Perangkat publik | `device_id`, `start_date`, `end_date` wajib |
 
-Tanggal memakai `YYYY-MM-DD`. Monitoring dan dataset memakai default `device_id=solar-001` jika tidak diberikan. Latest dan history sensor mencari data dalam 14 hari terakhir. History sensor diurutkan dari terbaru. Riwayat prediksi menggunakan rentang inklusif maksimal 31 hari, diurutkan dari tanggal paling awal. Prediksi terbaru ditentukan berdasarkan tanggal prediksi terbesar.
+Tanggal memakai `YYYY-MM-DD`. Monitoring dan dataset memakai default `device_id=solar-001` jika tidak diberikan. Latest sensor dan history tanpa filter tanggal mencari data dalam 14 hari terakhir. Filter `date` pada history dapat membaca tanggal di luar jendela tersebut. History sensor diurutkan dari terbaru. Riwayat prediksi menggunakan rentang inklusif maksimal 31 hari, diurutkan dari tanggal paling awal. Prediksi terbaru ditentukan berdasarkan tanggal prediksi terbesar.
 
 Authentication, profil pengguna, Device Reference, dan Recommendations sudah dihapus dari backend aktif. Route lamanya mengembalikan 404; data Firebase lama tidak dihapus atau diimpor otomatis.
+
+## Kontrak Riwayat untuk Flutter
+
+Kelima endpoint berikut memakai `device_id` (default `solar-001`) dan daftar
+`PUBLIC_DEVICE_IDS`, tanpa token atau API key. Semua tanggal adalah tanggal WIB;
+angka `hour` berarti jam 0?23 di Asia/Jakarta. Semua contoh JSON berikut ilustratif.
+AI tidak digunakan dalam rekap riwayat atau grafik.
+
+### History per interval
+
+`GET /api/v1/monitoring/history?device_id=solar-001&date=2026-11-02&limit=100&offset=0`
+
+- `date` opsional, format `YYYY-MM-DD`.
+- `limit`: 1-1000, default 100. `offset`: 0-1000000, default 0.
+- Urutan terbaru lebih dahulu; timestamp yang sama memakai ID sebagai tie-breaker.
+- Tanpa `date`, jendela 14 hari terakhir tetap berlaku, termasuk saat memakai offset.
+- Jika `date` atau `offset` diberikan, metadata pagination dan token `snapshot` ditambahkan. Tanpa keduanya,
+  key respons tetap `device_id`, `count`, dan `data` seperti sebelumnya.
+
+```json
+{
+  "device_id": "solar-001",
+  "count": 1,
+  "data": [{
+    "reading_id": "r1", "device_id": "solar-001",
+    "timestamp": "2026-11-02T07:30:00+07:00",
+    "voltage_v": 12, "current_a": 2, "power_w": 24,
+    "energy_wh": 0.4, "interval_seconds": 60
+  }],
+  "date": "2026-11-02", "limit": 100, "offset": 0,
+  "has_more": false, "next_offset": null, "snapshot": "<token-dari-server>"
+}
+```
+
+Lanjutkan menggunakan `next_offset` sampai `has_more=false`, dan selalu kirim
+`snapshot` dari halaman pertama pada request halaman berikutnya. `count` adalah jumlah
+item pada halaman, bukan total seluruh pembacaan. Offset besar melewati akhir data
+menghasilkan array kosong. Pagination memakai urutan stabil. Dengan token `snapshot` yang sama, sisipan sensor baru
+atau data buffer terlambat tidak menggeser halaman; rentang default juga tetap sama
+meskipun WIB melewati tengah malam. Refresh dari halaman pertama tanpa snapshot untuk
+melihat data baru. Tanpa snapshot, offset tetap kompatibel tetapi dapat bergeser saat
+ada sisipan baru. Jaminan snapshot berlaku untuk data append-only melalui API;
+penghapusan/perubahan baris langsung oleh administrator di luar API tidak dicakup.
+
+### Rekap harian
+
+`GET /api/v1/monitoring/daily-summary?device_id=solar-001&date=2026-11-02`
+
+`date` opsional, default hari ini WIB. Field lama dipertahankan; rata-rata tegangan
+serta arus ditambahkan.
+
+```json
+{
+  "device_id": "solar-001", "timezone": "Asia/Jakarta",
+  "data": {
+    "date": "2026-11-02", "total_energy_wh": 1.2, "reading_count": 3,
+    "avg_voltage_v": 12, "avg_current_a": 2,
+    "avg_power_w": 24, "max_power_w": 36
+  }
+}
+```
+
+### Rekap minggu dan bulan
+
+`GET /api/v1/monitoring/daily-history?device_id=solar-001&start_date=2026-11-02&end_date=2026-11-08`
+
+Untuk bulan November gunakan `start_date=2026-11-01&end_date=2026-11-30`.
+Rentang inklusif maksimal 366 hari. Kedua parameter harus diberikan bersama; rentang
+terbalik atau terlalu panjang ditolak. Jika tanggal eksplisit dan `days` sama-sama
+ada, tanggal eksplisit dipakai. Rentang eksplisit mengisi hari tanpa data dengan nol.
+
+```json
+{
+  "device_id": "solar-001", "timezone": "Asia/Jakarta",
+  "start_date": "2026-11-02", "end_date": "2026-11-02", "count": 1,
+  "data": [{
+    "date": "2026-11-02", "total_energy_wh": 1.2, "reading_count": 3,
+    "max_power_w": 36, "avg_power_w": 24
+  }]
+}
+```
+
+Tanpa tanggal eksplisit, `days` tetap 1?30, default 30, berakhir hari ini WIB.
+Kontrak lama tetap mengembalikan hanya hari yang memiliki data; metadata rentang
+baru tidak ditambahkan dalam mode `days`.
+
+### Grafik harian per jam
+
+`GET /api/v1/monitoring/hourly-summary?device_id=solar-001&date=2026-11-02`
+
+`date` wajib. Respons selalu memiliki `count: 24` dan 24 item untuk jam 0 sampai 23.
+Jam tanpa pengukuran berisi energi dan jumlah pembacaan nol. Contoh berikut merangkum
+bentuk item pertama; respons sebenarnya tetap memuat seluruh 24 item:
+
+```json
+{
+  "device_id": "solar-001", "date": "2026-11-02",
+  "timezone": "Asia/Jakarta", "count": 24,
+  "data": [{ "hour": 0, "total_energy_wh": 0.2, "reading_count": 1 }]
+}
+```
+
+### Ringkasan periode terpilih
+
+`GET /api/v1/monitoring/period-summary?device_id=solar-001&start_date=2026-11-02&end_date=2026-11-08`
+
+Kedua tanggal wajib; maksimal 366 hari inklusif.
+
+```json
+{
+  "device_id": "solar-001", "start_date": "2026-11-02", "end_date": "2026-11-08",
+  "timezone": "Asia/Jakarta",
+  "data": {
+    "total_energy_wh": 1.2, "reading_count": 3,
+    "avg_voltage_v": 12, "avg_current_a": 2, "avg_power_w": 24
+  }
+}
+```
+
+Semua rata-rata dihitung dari sampel aktual dalam periode, bukan rata-rata dari
+rata-rata harian atau bobot durasi. Rekap kosong memiliki energi, rata-rata, daya
+maksimum (jika field tersedia), dan jumlah pembacaan nol. Nilai nol dengan
+`reading_count=0` menandakan tidak ada data, bukan bukti produksi energinya nol.
+Agregasi dibulatkan ke sembilan angka desimal seperti rekap sebelumnya.
+
+Kesalahan format tanggal, parameter wajib hilang, atau pagination tidak valid: 422.
+Rentang terbalik atau lebih dari 366 hari: 400. Perangkat di luar daftar publik: 404.
+Query SQL memakai indeks yang sudah ada; tidak ada perubahan tabel/migrasi baru.
 
 ## Data sensor
 
@@ -150,7 +280,7 @@ export/validasi/import terpisah sebelum pergantian produksi.
 npm test
 ```
 
-Hasil terakhir: **20 berhasil, 0 gagal**. Adapter binding D1 menjalankan SQL dan migrasi sebenarnya pada SQLite in-memory melalui `node:sqlite` (Node.js 24); seluruh akses jaringan diblokir. Cakupan mencakup 10 endpoint, beberapa perangkat, batas tanggal WIB, daftar izin, isolasi data, API key IoT/AI, validasi, duplikasi, foreign key, serta route yang dihapus. Tidak membaca `.dev.vars` atau mengakses produksi.
+Hasil terakhir: **34 berhasil, 0 gagal**. Adapter binding D1 menjalankan SQL dan migrasi sebenarnya pada SQLite in-memory melalui `node:sqlite` (Node.js 24); seluruh akses jaringan diblokir. Cakupan mencakup 12 endpoint, beberapa perangkat, batas tanggal WIB, daftar izin, isolasi data, API key IoT/AI, validasi, duplikasi, foreign key, serta route yang dihapus. Tidak membaca `.dev.vars` atau mengakses produksi.
 
 Build lokal:
 
@@ -167,7 +297,7 @@ Invoke-RestMethod 'http://127.0.0.1:8787/api/v1/monitoring/latest?device_id=sola
 Invoke-RestMethod 'http://127.0.0.1:8787/api/v1/ai/predictions/latest?device_id=solar-002'
 ```
 
-Sesuaikan port dengan output Wrangler. `wrangler dev` memakai D1 lokal; jangan memakai `--remote` untuk pengujian ini. Smoke test 10 endpoint pada Worker lokal dan migrasi D1 lokal sudah berhasil. Integrasi Flutter/ESP8266 dan D1 remote belum diuji.
+Sesuaikan port dengan output Wrangler. `wrangler dev` memakai D1 lokal; jangan memakai `--remote` untuk pengujian ini. Smoke test 10 endpoint sebelum penambahan riwayat pada Worker lokal dan migrasi D1 lokal sudah berhasil. Endpoint riwayat terbaru diuji dengan SQL SQLite lokal dan build Wrangler. Integrasi Flutter/ESP8266 dan D1 remote belum diuji.
 
 ## Pembuatan D1 remote dan deployment (belum dijalankan)
 

@@ -130,3 +130,102 @@ test('SQL constraints reject invalid values and foreign prediction devices',()=>
  assert.throws(()=>sql.prepare('INSERT INTO energy_predictions VALUES (?,?,?,?,?)').run('missing','2026-11-03',1,'Linear Regression','2026-11-02'));
  assert.throws(()=>sql.prepare('INSERT INTO energy_predictions VALUES (?,?,?,?,?)').run('solar-001','2026-11-03',-1,'Linear Regression','2026-11-02'));
 });
+
+async function seedHistoryDay() {
+ const samples=[['outside-before','2026-11-01T16:59:00Z',9],['midnight','2026-11-01T17:00:00Z',1],['morning','2026-11-02T07:30:00+07:00',2],['night','2026-11-02T16:59:00Z',3],['outside-after','2026-11-02T17:00:00Z',9]];
+ for(const [id,timestamp,current]of samples)assert.equal((await postSensor(sensor({reading_id:id,timestamp,current_a:current}))).status,200);
+}
+test('history date filter uses WIB with stable limit/offset pagination and legacy shape',async()=>{
+ await seedHistoryDay();
+ const first=await (await request('/api/v1/monitoring/history?date=2026-11-02&limit=2&offset=0')).json();
+ assert.equal(first.count,2);assert.deepEqual(first.data.map(r=>r.reading_id),['night','morning']);assert.equal(first.has_more,true);assert.equal(first.next_offset,2);
+ const next=await (await request('/api/v1/monitoring/history?date=2026-11-02&limit=2&offset=2')).json();
+ assert.deepEqual(next.data.map(r=>r.reading_id),['midnight']);assert.equal(next.has_more,false);assert.equal(next.next_offset,null);
+ assert.equal(next.data[0].voltage_v,12);assert.equal(next.data[0].current_a,1);assert.equal(next.data[0].energy_wh,0.2);
+ const beyond=await (await request('/api/v1/monitoring/history?date=2026-11-02&offset=100')).json();assert.deepEqual(beyond.data,[]);
+ const legacy=await (await request('/api/v1/monitoring/history')).json();assert.deepEqual(Object.keys(legacy).sort(),['count','data','device_id']);
+});
+test('daily summary adds sample averages with existing energy/power fields',async()=>{
+ await seedHistoryDay();const body=await (await request('/api/v1/monitoring/daily-summary?date=2026-11-02')).json();
+ assert.deepEqual(body,{device_id:'solar-001',timezone:'Asia/Jakarta',data:{date:'2026-11-02',total_energy_wh:1.2,reading_count:3,avg_voltage_v:12,avg_current_a:2,avg_power_w:24,max_power_w:36}});
+});
+test('hourly summary returns all 24 WIB hours including zeros and boundary data',async()=>{
+ await seedHistoryDay();const body=await (await request('/api/v1/monitoring/hourly-summary?date=2026-11-02')).json();
+ assert.equal(body.timezone,'Asia/Jakarta');assert.equal(body.count,24);assert.equal(body.data.length,24);
+ assert.deepEqual(body.data[0],{hour:0,total_energy_wh:0.2,reading_count:1});assert.equal(body.data[7].total_energy_wh,0.4);assert.equal(body.data[23].total_energy_wh,0.6);assert.equal(body.data[1].total_energy_wh,0);
+ assert.ok(Math.abs(body.data.reduce((sum,r)=>sum+r.total_energy_wh,0)-1.2)<1e-9);
+});
+test('daily history supports inclusive weekly/monthly ranges and fills missing dates',async()=>{
+ await seedHistoryDay();
+ for(const [start,end,count]of [['2026-11-02','2026-11-08',7],['2026-11-01','2026-11-30',30]]){
+ const r=await request(`/api/v1/monitoring/daily-history?start_date=${start}&end_date=${end}`);assert.equal(r.status,200);const body=await r.json();assert.equal(body.count,count);assert.equal(body.data[0].date,start);assert.equal(body.data.at(-1).date,end);
+ assert.equal(body.data.find(row=>row.date==='2026-11-02').total_energy_wh,1.2);assert.equal(body.data.find(row=>row.date==='2026-11-08').reading_count,0);}
+ const legacy=await (await request('/api/v1/monitoring/daily-history?days=1')).json();assert.equal(legacy.start_date,undefined);assert.equal(legacy.data.length,0);
+});
+test('period summary aggregates raw samples rather than averaging daily averages',async()=>{
+ await postSensor(sensor({reading_id:'a',timestamp:'2026-11-02T01:00:00+07:00',voltage_v:10,current_a:1}));
+ await postSensor(sensor({reading_id:'b',timestamp:'2026-11-03T01:00:00+07:00',voltage_v:20,current_a:2}));
+ await postSensor(sensor({reading_id:'c',timestamp:'2026-11-03T02:00:00+07:00',voltage_v:30,current_a:3}));
+ const r=await request('/api/v1/monitoring/period-summary?start_date=2026-11-02&end_date=2026-11-03');assert.equal(r.status,200);const body=await r.json();
+ assert.equal(body.data.reading_count,3);assert.equal(body.data.avg_voltage_v,20);assert.equal(body.data.avg_current_a,2);assert.equal(body.data.avg_power_w,46.666666667);assert.equal(body.data.total_energy_wh,2.333333333);
+});
+test('empty history endpoints return consistent zero and empty results',async()=>{
+ for(const path of ['daily-summary','hourly-summary']){const body=await (await request(`/api/v1/monitoring/${path}?date=2026-11-02`)).json();if(path==='hourly-summary')assert.ok(body.data.every(row=>row.total_energy_wh===0&&row.reading_count===0));else assert.equal(body.data.avg_voltage_v,0);}
+ const period=await (await request('/api/v1/monitoring/period-summary?start_date=2026-11-02&end_date=2026-11-02')).json();assert.deepEqual(period.data,{total_energy_wh:0,reading_count:0,avg_voltage_v:0,avg_current_a:0,avg_power_w:0});
+ const history=await (await request('/api/v1/monitoring/history?date=2026-11-02')).json();assert.equal(history.has_more,false);assert.deepEqual(history.data,[]);
+});
+test('all history endpoints reject invalid dates, bad pagination and oversized ranges',async()=>{
+ for(const path of ['history','daily-summary','hourly-summary'])for(const date of ['2026-02-30','02-11-2026','0000-01-01',''])assert.equal((await request(`/api/v1/monitoring/${path}?date=${date}`)).status,422);
+ for(const query of ['offset=-1','offset=1.5','offset=1000001','offset=9007199254740992','limit=0','limit=1001','limit=','offset=abc'])assert.equal((await request('/api/v1/monitoring/history?'+query)).status,422);
+ for(const path of ['daily-history','period-summary']){
+ for(const query of ['start_date=2026-11-02','end_date=2026-11-02','start_date=bad&end_date=2026-11-02'])assert.equal((await request(`/api/v1/monitoring/${path}?${query}`)).status,422);
+ assert.equal((await request(`/api/v1/monitoring/${path}?start_date=2026-11-03&end_date=2026-11-02`)).status,400);
+ assert.equal((await request(`/api/v1/monitoring/${path}?start_date=2025-01-01&end_date=2026-11-02`)).status,400);}
+ assert.equal((await request('/api/v1/monitoring/hourly-summary')).status,422);
+});
+test('large day pagination and aggregates include every reading without response truncation',async()=>{
+ const stmt=sql.prepare('INSERT INTO sensor_readings VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+ for(let i=0;i<1440;i++){const timestamp=new Date(Date.parse('2026-11-02T00:00:00+07:00')+i*60000).toISOString();stmt.run('solar-001','2026-11-02','bulk-'+i,'bulk-'+i,timestamp,Date.parse(timestamp),12,2,24,0.4,60);}
+ const ids=[];for(let offset=0;offset<1440;offset+=1000){const body=await (await request(`/api/v1/monitoring/history?date=2026-11-02&limit=1000&offset=${offset}`)).json();ids.push(...body.data.map(r=>r.reading_id));}
+ assert.equal(new Set(ids).size,1440);
+ const daily=await (await request('/api/v1/monitoring/daily-summary?date=2026-11-02')).json();assert.equal(daily.data.reading_count,1440);assert.equal(daily.data.total_energy_wh,576);
+ const hourly=await (await request('/api/v1/monitoring/hourly-summary?date=2026-11-02')).json();assert.ok(hourly.data.every(row=>row.reading_count===60&&row.total_energy_wh===24));
+});
+test('pagination tie-breaker is stable and histories stay isolated by device',async()=>{
+ for(const id of ['a','b','c'])await postSensor(sensor({reading_id:id,timestamp:'2026-11-02T00:00:00+07:00'}));
+ await postSensor(sensor({device_id:'solar-002',timestamp:'2026-11-02T00:00:00+07:00',current_a:9}));
+ const ids=[];for(let offset=0;offset<3;offset++){const body=await (await request(`/api/v1/monitoring/history?date=2026-11-02&limit=1&offset=${offset}`)).json();ids.push(body.data[0].reading_id);}assert.deepEqual(ids,['c','b','a']);
+ for(const path of ['hourly-summary?date=2026-11-02','period-summary?start_date=2026-11-02&end_date=2026-11-02']){const r=await request('/api/v1/monitoring/'+path+'&device_id=private');assert.equal(r.status,404);}
+ const period=await (await request('/api/v1/monitoring/period-summary?device_id=solar-001&start_date=2026-11-02&end_date=2026-11-02')).json();assert.equal(period.data.reading_count,3);
+});
+test('range date precedence, leap-year bounds and supported maximum date',async()=>{
+ const leap=await request('/api/v1/monitoring/daily-history?start_date=2024-01-01&end_date=2024-12-31&days=invalid');assert.equal(leap.status,200);assert.equal((await leap.json()).count,366);
+ const max=await request('/api/v1/monitoring/daily-history?start_date=9999-12-31&end_date=9999-12-31');assert.equal(max.status,200);assert.equal((await max.json()).count,1);
+});
+
+test('snapshot pagination excludes new and late-buffer readings without skipping original rows',async()=>{
+ for(const [id,time]of [['a','01:00'],['b','02:00'],['c','03:00']])await postSensor(sensor({reading_id:id,timestamp:`2026-11-02T${time}:00+07:00`}));
+ const first=await (await request('/api/v1/monitoring/history?date=2026-11-02&limit=1&offset=0')).json();assert.equal(first.data[0].reading_id,'c');assert.ok(first.snapshot);
+ await postSensor(sensor({reading_id:'newer',timestamp:'2026-11-02T04:00:00+07:00'}));
+ await postSensor(sensor({reading_id:'buffered',timestamp:'2026-11-02T01:30:00+07:00'}));
+ const ids=[first.data[0].reading_id];let offset=first.next_offset;
+ while(offset!==null){const page=await (await request(`/api/v1/monitoring/history?date=2026-11-02&limit=1&offset=${offset}&snapshot=${first.snapshot}`)).json();assert.equal(page.snapshot,first.snapshot);ids.push(...page.data.map(row=>row.reading_id));offset=page.next_offset;}
+ assert.deepEqual(ids,['c','b','a']);assert.equal(new Set(ids).size,3);
+ const refreshed=await (await request('/api/v1/monitoring/history?date=2026-11-02&limit=100&offset=0')).json();assert.equal(refreshed.count,5);
+});
+test('snapshot validation binds device/date and rejects malformed tokens',async()=>{
+ await seedHistoryDay();const first=await (await request('/api/v1/monitoring/history?date=2026-11-02')).json();
+ for(const query of [`device_id=solar-002&date=2026-11-02&snapshot=${first.snapshot}`,`date=2026-11-03&snapshot=${first.snapshot}`,`snapshot=${first.snapshot}`,'snapshot=broken','snapshot='])assert.equal((await request('/api/v1/monitoring/history?'+query)).status,422);
+});
+test('history snapshot freezes default date window across midnight WIB',async()=>{
+ const { handleHistory }=await import('../src/history.js');
+ await postSensor(sensor({timestamp:'2026-11-02T23:59:00+07:00'}));
+ const first=await (await handleHistory(env,'solar-001','/api/v1/monitoring/history',new URLSearchParams('offset=0&limit=1'),'2026-11-02')).json();
+ const next=await (await handleHistory(env,'solar-001','/api/v1/monitoring/history',new URLSearchParams('offset=0&limit=1&snapshot='+first.snapshot),'2026-11-03')).json();
+ assert.deepEqual(next.data,first.data);assert.equal(next.snapshot,first.snapshot);
+});
+test('hourly and period endpoints reject wrong methods, private devices and stay SQL-indexed',async()=>{
+ for(const path of ['/api/v1/monitoring/hourly-summary?date=2026-11-02','/api/v1/monitoring/period-summary?start_date=2026-11-02&end_date=2026-11-02']){
+ assert.equal((await request(path,{method:'POST'})).status,405);assert.equal((await request(path+'&device_id=private')).status,404);}
+ const plan=sql.prepare('EXPLAIN QUERY PLAN SELECT SUM(energy_wh) FROM sensor_readings WHERE device_id=? AND reading_date BETWEEN ? AND ?').all('solar-001','2026-11-01','2026-11-30');assert.ok(plan.some(row=>row.detail.includes('INDEX')));
+});
