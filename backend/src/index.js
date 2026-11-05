@@ -2,6 +2,7 @@
 import { errorResponse, requirePrototypeDevice } from "./api.js";
 import { handlePredictions, verifyAI } from "./predictions.js";
 import { readSensorDay, insertSensor } from "./database.js";
+import { handleHistory } from "./history.js";
 
 const ZONE = "Asia/Jakarta";
 
@@ -15,18 +16,6 @@ function json(data, status = 200) {
 function validId(value) {
   return typeof value === "string" &&
     /^[A-Za-z0-9_-]{1,120}$/.test(value);
-}
-
-function validDate(value) {
-  if (
-    typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(value)
-  ) return false;
-
-  const date = new Date(`${value}T00:00:00Z`);
-
-  return !Number.isNaN(date.getTime()) &&
-    date.toISOString().slice(0, 10) === value;
 }
 
 function dayJakarta(timestamp) {
@@ -148,6 +137,8 @@ export default {
       "/api/v1/monitoring/history",
       "/api/v1/monitoring/daily-summary",
       "/api/v1/monitoring/daily-history",
+      "/api/v1/monitoring/hourly-summary",
+      "/api/v1/monitoring/period-summary",
       "/api/v1/ai/dataset"
     ];
 
@@ -267,65 +258,10 @@ export default {
         });
       }
 
-      // GET: riwayat sensor
-      if (path === "/api/v1/monitoring/history") {
-        const limit = Number(
-          url.searchParams.get("limit") || 100
-        );
-
-        if (
-          !Number.isInteger(limit) ||
-          limit < 1 ||
-          limit > 1000
-        ) {
-          return json(
-            { detail: "limit must be 1..1000" },
-            422
-          );
-        }
-
-        const rows = await readDays(
-          env,
-          deviceId,
-          dateRange(14)
-        );
-
-        const data = rows.slice(-limit).reverse();
-
-        return json({
-          device_id: deviceId,
-          count: data.length,
-          data
-        });
-      }
-
-      // GET: rekap satu tanggal
-      if (path === "/api/v1/monitoring/daily-summary") {
-        const date =
-          url.searchParams.get("date") ||
-          dayJakarta(new Date().toISOString());
-
-        if (!validDate(date)) {
-          return json(
-            { detail: "Invalid date; use YYYY-MM-DD" },
-            422
-          );
-        }
-
-        const rows = await readDay(env, deviceId, date);
-        const summary = summarizeDaily(rows)[0] || {
-          date,
-          total_energy_wh: 0,
-          reading_count: 0,
-          avg_power_w: 0,
-          max_power_w: 0
-        };
-
-        return json({
-          device_id: deviceId,
-          timezone: ZONE,
-          data: summary
-        });
+      if (["/api/v1/monitoring/history", "/api/v1/monitoring/daily-summary",
+        "/api/v1/monitoring/daily-history", "/api/v1/monitoring/hourly-summary",
+        "/api/v1/monitoring/period-summary"].includes(path)) {
+        return handleHistory(env, deviceId, path, url.searchParams, dayJakarta(new Date().toISOString()));
       }
 
       // GET: riwayat energi / dataset AI
