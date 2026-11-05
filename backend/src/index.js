@@ -114,7 +114,7 @@ function summarizeDaily(rows) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export default {
+const api = {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -316,6 +316,60 @@ export default {
       return json(
         { detail: "Internal server error" },
         500
+      );
+    }
+  }
+};
+
+const ALLOWED_WEB_ORIGINS = new Set([
+  "https://preview-solar-monitoring.pages.dev"
+]);
+
+function withCors(response, origin) {
+  const headers = new Headers(response.headers);
+
+  // Respons dapat berbeda berdasarkan Origin.
+  headers.append("Vary", "Origin");
+
+  if (ALLOWED_WEB_ORIGINS.has(origin)) {
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+    headers.set("Access-Control-Allow-Headers", "Content-Type, Accept");
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+export default {
+  async fetch(request, env) {
+    const origin = request.headers.get("Origin");
+
+    // Pemeriksaan izin awal dari browser.
+    if (request.method === "OPTIONS") {
+      if (!ALLOWED_WEB_ORIGINS.has(origin)) {
+        return new Response(null, { status: 403 });
+      }
+
+      return withCors(
+        new Response(null, { status: 204 }),
+        origin
+      );
+    }
+
+    try {
+      // await memastikan respons dari semua handler ikut dibungkus.
+      const response = await api.fetch(request, env);
+      return withCors(response, origin);
+    } catch (error) {
+      console.error("API_REQUEST_ERROR");
+
+      return withCors(
+        json({ detail: "Internal server error" }, 500),
+        origin
       );
     }
   }
