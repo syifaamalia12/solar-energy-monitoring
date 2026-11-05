@@ -48,8 +48,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       return service.fetchHistory(days: _days);
     });
 
-    // Pasang penanganan segera sebelum FutureBuilder dibangun ulang.
-    // Future asli tetap dikembalikan agar data/error tampil di halaman.
+    // FutureBuilder tetap menerima data/error asli.
     future.ignore();
 
     return future;
@@ -77,37 +76,46 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Riwayat Energi',
-          key: const ValueKey('page-title'),
-          style: textTheme.titleLarge,
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFE7EDF5)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Periode hari terakhir berdasarkan WIB',
+                style: TextStyle(color: Color(0xFF75839A), fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  for (final days in const [7, 14, 30])
+                    ChoiceChip(
+                      key: ValueKey('history-period-$days'),
+                      label: Text('$days hari'),
+                      selected: _days == days,
+                      onSelected: (_) => _selectPeriod(days),
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 12),
-        const Text('Periode hari terakhir berdasarkan WIB'),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final days in const [7, 14, 30])
-              ChoiceChip(
-                key: ValueKey('history-period-$days'),
-                label: Text('$days hari'),
-                selected: _days == days,
-                onSelected: (_) => _selectPeriod(days),
-              ),
-          ],
-        ),
-        const SizedBox(height: 20),
         FutureBuilder<List<DailyEnergy>>(
           future: _future,
           builder: (context, snapshot) {
-            // Jangan tampilkan data periode lama ketika periode baru dimuat.
+            // Jangan menampilkan periode lama sebagai data periode baru.
             if (snapshot.connectionState != ConnectionState.done) {
               return const AppLoading(message: 'Memuat riwayat energi...');
             }
@@ -152,43 +160,107 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget _buildData(BuildContext context, List<DailyEnergy> rows) {
     final textTheme = Theme.of(context).textTheme;
 
+    final total = rows.fold<double>(0, (sum, item) => sum + item.totalEnergyWh);
+
+    final totalReadings = rows.fold<int>(
+      0,
+      (sum, item) => sum + item.readingCount,
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Data dari API. Data pada server masih dapat berupa data pengujian.',
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'Tersedia ${rows.length} hari dengan pembacaan '
-          'dalam $_days hari terakhir.',
-        ),
-        const SizedBox(height: 16),
         Card(
           margin: EdgeInsets.zero,
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Grafik energi harian', style: textTheme.titleMedium),
-                const SizedBox(height: 4),
-                const Text('Energi (Wh)'),
-                const SizedBox(height: 20),
-                _EnergyChart(rows: rows),
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.bar_chart_rounded,
+                      color: Color(0xFF0866FF),
+                      size: 22,
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Grafik energi harian',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Energi (Wh)',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF75839A)),
+                ),
                 const SizedBox(height: 12),
+                _EnergyChart(rows: rows),
+                const SizedBox(height: 8),
                 const Text(
                   'Tanggal (WIB). Sentuh batang untuk melihat nilai. '
                   'Geser grafik ke samping jika diperlukan.',
+                  style: TextStyle(color: Color(0xFF75839A), fontSize: 11),
                 ),
               ],
             ),
           ),
         ),
         const SizedBox(height: 12),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Ringkasan Periode',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                _SummaryRow(
+                  icon: Icons.bolt_rounded,
+                  color: const Color(0xFFE5A000),
+                  label: 'Total energi tercatat',
+                  value: '${formatMeasurement(total)} Wh',
+                ),
+                const Divider(height: 18),
+                _SummaryRow(
+                  icon: Icons.calendar_month_outlined,
+                  color: const Color(0xFF0866FF),
+                  label: 'Hari dengan data',
+                  value: '${rows.length} hari',
+                ),
+                const Divider(height: 18),
+                _SummaryRow(
+                  icon: Icons.sensors,
+                  color: const Color(0xFF14A75B),
+                  label: 'Jumlah pembacaan',
+                  value: '$totalReadings',
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Tersedia ${rows.length} hari dengan pembacaan '
+          'dalam $_days hari terakhir.',
+          style: textTheme.bodySmall,
+        ),
+        const SizedBox(height: 6),
         const Text(
           'Hanya tanggal yang memiliki pembacaan ditampilkan. '
           'Hari tanpa data tidak dianggap sebagai energi nol.',
+          style: TextStyle(fontSize: 11, color: Color(0xFF75839A)),
         ),
         if (rows.every((item) => item.totalEnergyWh == 0)) ...[
           const SizedBox(height: 8),
@@ -197,38 +269,121 @@ class _HistoryScreenState extends State<HistoryScreen> {
             'Batang berada pada garis dasar grafik.',
           ),
         ],
-        const SizedBox(height: 20),
-        Text('Daftar energi harian', style: textTheme.titleMedium),
-        const SizedBox(height: 8),
+        const SizedBox(height: 16),
+        Text(
+          'Daftar energi harian',
+          style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 10),
         for (final item in rows)
           Card(
             key: ValueKey('history-row-${item.date}'),
             margin: const EdgeInsets.only(bottom: 8),
             child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
+              padding: const EdgeInsets.all(12),
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '${_displayDate(item.date)} WIB',
-                    style: textTheme.titleSmall,
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEDF4FF),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.calendar_today_outlined,
+                      size: 20,
+                      color: Color(0xFF0866FF),
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${formatMeasurement(item.totalEnergyWh)} Wh',
-                    style: textTheme.titleMedium,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${_displayDate(item.date)} WIB',
+                          style: textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${formatMeasurement(item.totalEnergyWh)} Wh',
+                          style: const TextStyle(
+                            color: Color(0xFF0866FF),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 17,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${item.readingCount} pembacaan',
+                          style: textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Text('${item.readingCount} pembacaan'),
                 ],
               ),
             ),
           ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
+        const Text(
+          'Data dari API. Data pada server masih dapat berupa data pengujian.',
+          style: TextStyle(color: Color(0xFF75839A), fontSize: 11),
+        ),
+        const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: _reload,
           icon: const Icon(Icons.refresh),
           label: const Text('Muat ulang'),
+        ),
+      ],
+    );
+  }
+}
+
+class _SummaryRow extends StatelessWidget {
+  const _SummaryRow({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: '$label\n',
+                  style: const TextStyle(
+                    color: Color(0xFF75839A),
+                    fontSize: 11,
+                  ),
+                ),
+                TextSpan(
+                  text: value,
+                  style: const TextStyle(
+                    color: Color(0xFF18243A),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ],
     );
@@ -242,15 +397,12 @@ class _EnergyChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
     final peak = rows.fold<double>(
       0,
       (maximum, item) => math.max(maximum, item.totalEnergyWh),
     );
 
-    // Skala internal dinormalisasi agar energi yang sangat kecil
-    // tetap tergambar. Label dan tooltip tetap memakai nilai Wh asli.
+    // Batang dinormalisasi, tetapi label dan tooltip tetap Wh asli.
     final scale = peak > 0 ? peak : 1.0;
 
     return LayoutBuilder(
@@ -264,7 +416,7 @@ class _EnergyChart extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           child: SizedBox(
             width: chartWidth,
-            height: 260,
+            height: 190,
             child: BarChart(
               key: const ValueKey('history-chart'),
               BarChartData(
@@ -293,7 +445,10 @@ class _EnergyChart extends StatelessWidget {
                       getTitlesWidget: (value, meta) {
                         return Text(
                           formatMeasurement(value * scale, decimals: 3),
-                          style: const TextStyle(fontSize: 10),
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF75839A),
+                          ),
                         );
                       },
                     ),
@@ -318,7 +473,10 @@ class _EnergyChart extends StatelessWidget {
                           padding: const EdgeInsets.only(top: 8),
                           child: Text(
                             '${parts[2]}/${parts[1]}',
-                            style: const TextStyle(fontSize: 11),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF75839A),
+                            ),
                           ),
                         );
                       },
@@ -351,7 +509,11 @@ class _EnergyChart extends StatelessWidget {
                       barRods: [
                         BarChartRodData(
                           toY: rows[index].totalEnergyWh / scale,
-                          color: colors.primary,
+                          gradient: const LinearGradient(
+                            begin: Alignment.bottomCenter,
+                            end: Alignment.topCenter,
+                            colors: [Color(0xFF0866FF), Color(0xFF53A5FF)],
+                          ),
                           width: 22,
                           borderRadius: const BorderRadius.vertical(
                             top: Radius.circular(5),

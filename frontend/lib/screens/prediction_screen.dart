@@ -47,9 +47,7 @@ class _PredictionScreenState extends State<PredictionScreen> {
       return service.fetchLatestPrediction();
     });
 
-    // Pasang penanganan segera, sebelum FutureBuilder dibangun ulang.
-    // Future asli tetap dikembalikan sehingga FutureBuilder masih
-    // menerima data maupun error untuk ditampilkan di halaman.
+    // FutureBuilder tetap menerima data/error asli.
     future.ignore();
 
     return future;
@@ -81,14 +79,11 @@ class _PredictionScreenState extends State<PredictionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Prediksi Energi',
-          key: const ValueKey('page-title'),
-          style: Theme.of(context).textTheme.titleLarge,
+        const Text(
+          'Prediksi produksi energi harian panel surya dalam Wh.',
+          style: TextStyle(color: Color(0xFF75839A), fontSize: 12),
         ),
         const SizedBox(height: 12),
-        const Text('Prediksi produksi energi harian panel surya dalam Wh.'),
-        const SizedBox(height: 20),
         FutureBuilder<EnergyPrediction?>(
           future: _future,
           builder: (context, snapshot) {
@@ -110,24 +105,7 @@ class _PredictionScreenState extends State<PredictionScreen> {
             final data = snapshot.data;
 
             if (data == null) {
-              return Column(
-                children: [
-                  const AppEmptyState(
-                    message: 'Prediksi energi belum tersedia.',
-                  ),
-                  const Text(
-                    'Belum ada hasil prediksi yang tersedia dari backend.',
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    key: const ValueKey('prediction-refresh'),
-                    onPressed: _reload,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Muat ulang'),
-                  ),
-                ],
-              );
+              return _buildEmpty();
             }
 
             return _buildData(context, data);
@@ -137,10 +115,37 @@ class _PredictionScreenState extends State<PredictionScreen> {
     );
   }
 
-  Widget _buildData(BuildContext context, EnergyPrediction data) {
-    final colors = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
+  Widget _buildEmpty() {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: SizedBox(
+        width: double.infinity,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const AppEmptyState(message: 'Prediksi energi belum tersedia.'),
+              const Text(
+                'Belum ada hasil prediksi yang tersedia dari backend.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Color(0xFF75839A), fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: const ValueKey('prediction-refresh'),
+                onPressed: _reload,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Muat ulang'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
+  Widget _buildData(BuildContext context, EnergyPrediction data) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -148,60 +153,58 @@ class _PredictionScreenState extends State<PredictionScreen> {
           width: double.infinity,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: colors.secondaryContainer,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF0866FF), Color(0xFF12477E)],
+            ),
             borderRadius: BorderRadius.circular(16),
           ),
-          child: const Row(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.cloud_done_outlined),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Data dari API\n'
-                  'Menampilkan hasil prediksi yang tersimpan di server. '
-                  'Data pada server masih dapat berupa data pengujian.',
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Card(
-          margin: EdgeInsets.zero,
-          child: SizedBox(
-            width: double.infinity,
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const Row(
                 children: [
-                  Icon(
-                    Icons.solar_power_outlined,
-                    size: 32,
-                    color: colors.primary,
-                  ),
-                  const SizedBox(height: 12),
-                  const Text('Prediksi produksi energi'),
-                  const SizedBox(height: 8),
-                  Text(
-                    '${formatMeasurement(data.predictedEnergyWh)} Wh',
-                    key: const ValueKey('prediction-energy'),
-                    style: textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+                  Icon(Icons.insights_rounded, color: Colors.white, size: 26),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Prediksi produksi energi',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  const Text('Tanggal target prediksi (WIB)'),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatDate(data.predictionDate),
-                    key: const ValueKey('prediction-target-date'),
-                    style: textTheme.titleLarge,
                   ),
                 ],
               ),
-            ),
+              const SizedBox(height: 14),
+              Text(
+                '${formatMeasurement(data.predictedEnergyWh)} Wh',
+                key: const ValueKey('prediction-energy'),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Tanggal target prediksi (WIB)',
+                style: TextStyle(color: Color(0xFFDCEAFF), fontSize: 12),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _formatDate(data.predictionDate),
+                key: const ValueKey('prediction-target-date'),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 12),
@@ -210,45 +213,109 @@ class _PredictionScreenState extends State<PredictionScreen> {
           child: SizedBox(
             width: double.infinity,
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Model prediksi'),
+                  const Row(
+                    children: [
+                      Icon(
+                        Icons.auto_graph_rounded,
+                        color: Color(0xFF0866FF),
+                        size: 24,
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Informasi Model Prediksi',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Model prediksi',
+                    style: TextStyle(color: Color(0xFF75839A), fontSize: 12),
+                  ),
                   const SizedBox(height: 4),
                   Text(
                     data.modelName,
                     key: const ValueKey('prediction-model'),
-                    style: textTheme.titleMedium,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  const SizedBox(height: 16),
-                  const Text('Waktu prediksi dibuat'),
+                  const Divider(height: 22),
+                  const Text(
+                    'Waktu prediksi dibuat',
+                    style: TextStyle(color: Color(0xFF75839A), fontSize: 12),
+                  ),
                   const SizedBox(height: 4),
                   Text(
                     _formatWib(data.createdAt),
                     key: const ValueKey('prediction-created-at'),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
               ),
             ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEDF4FF),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.cloud_done_outlined,
+                color: Color(0xFF0866FF),
+                size: 18,
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Data dari API\n'
+                  'Menampilkan hasil prediksi yang tersimpan di server. '
+                  'Data pada server masih dapat berupa data pengujian.',
+                  style: TextStyle(color: Color(0xFF405B80), fontSize: 11),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
         const Text(
           'Tanggal target mengikuti hasil backend, '
           'tidak selalu untuk besok.',
+          style: TextStyle(color: Color(0xFF75839A), fontSize: 11),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         const Text(
           'Nilai ini merupakan prediksi produksi energi panel surya, '
           'bukan konsumsi pengguna atau kapasitas baterai.',
+          style: TextStyle(color: Color(0xFF75839A), fontSize: 11),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         const Text(
           'Model dijalankan oleh layanan AI. '
           'Aplikasi hanya menampilkan hasilnya.',
+          style: TextStyle(color: Color(0xFF75839A), fontSize: 11),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         OutlinedButton.icon(
           key: const ValueKey('prediction-refresh'),
           onPressed: _reload,

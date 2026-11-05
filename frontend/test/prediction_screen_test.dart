@@ -41,7 +41,24 @@ Widget buildTestApp(PredictionService service) {
 }
 
 String textAt(WidgetTester tester, String key) {
-  return tester.widget<Text>(find.byKey(ValueKey(key))).data!;
+  final finder = find.byKey(ValueKey(key));
+
+  // Berikan pesan kegagalan yang jelas jika widget tidak ditemukan.
+  expect(
+    finder,
+    findsOneWidget,
+    reason: 'Widget dengan key "$key" harus tersedia.',
+  );
+
+  final text = tester.widget<Text>(finder).data;
+
+  expect(
+    text,
+    isNotNull,
+    reason: 'Widget dengan key "$key" harus memiliki teks.',
+  );
+
+  return text!;
 }
 
 Future<void> tapRefresh(WidgetTester tester) async {
@@ -62,7 +79,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.calls, 1);
-    expect(textAt(tester, 'page-title'), 'Prediksi Energi');
+
+    // Judul halaman sekarang berada di header MainScreen.
+    // Tes komponen ini memeriksa isi PredictionScreen.
+    expect(
+      find.text('Prediksi produksi energi harian panel surya dalam Wh.'),
+      findsOneWidget,
+    );
+
     expect(textAt(tester, 'prediction-energy'), '0.7500 Wh');
     expect(textAt(tester, 'prediction-target-date'), '02/11/2026');
     expect(textAt(tester, 'prediction-model'), 'Linear Regression');
@@ -138,6 +162,7 @@ void main() {
     tester,
   ) async {
     var attempts = 0;
+
     final service = TestPredictionService(() async {
       attempts++;
 
@@ -164,6 +189,7 @@ void main() {
     tester,
   ) async {
     var attempts = 0;
+
     final service = TestPredictionService(() async {
       attempts++;
 
@@ -197,6 +223,7 @@ void main() {
     tester,
   ) async {
     var attempts = 0;
+
     final service = TestPredictionService(() async {
       attempts++;
       return attempts == 1 ? null : sample();
@@ -218,6 +245,7 @@ void main() {
     tester,
   ) async {
     var attempts = 0;
+
     final service = TestPredictionService(() async {
       attempts++;
 
