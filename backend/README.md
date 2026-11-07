@@ -50,13 +50,14 @@ Jika belum diatur, default adalah `["solar-001"]`. Array kosong menolak seluruh 
 
 Daftar tersebut membatasi GET monitoring dan GET prediksi. Daftar ini tidak membuat perangkat baru dan tidak menggantikan autentikasi API IoT/AI. Konfigurasi `FIREBASE_*`, Firebase ID Token, dan Firebase SDK tidak digunakan lagi. Variabel Firebase pada `.dev.vars` lokal sudah dilepas; secret remote lama belum dihapus.
 
-## Dua belas endpoint aktif
+## Tiga belas endpoint aktif
 
 Path relatif terhadap URL Worker. Endpoint terlindungi memakai header `x-api-key`.
 
 | Metode | Path | Akses | Query |
 |---|---|---|---|
 | GET | `/health` | Publik | — |
+| GET | `/api/v1/devices/{device_id}/status` | Perangkat publik | ID pada path |
 | POST | `/api/v1/monitoring` | `IOT_API_KEY` | — |
 | GET | `/api/v1/monitoring/latest` | Perangkat publik | `device_id` |
 | GET | `/api/v1/monitoring/history` | Perangkat publik | `device_id`, `date` opsional, `limit` default 100/maks. 1000, `offset` default 0 |
@@ -201,6 +202,43 @@ Kesalahan format tanggal, parameter wajib hilang, atau pagination tidak valid: 4
 Rentang terbalik atau lebih dari 366 hari: 400. Perangkat di luar daftar publik: 404.
 Query SQL memakai indeks yang sudah ada; tidak ada perubahan tabel/migrasi baru.
 
+## Status Online/Offline ESP8266
+
+`GET /api/v1/devices/solar-001/status` mengikuti `PUBLIC_DEVICE_IDS` tanpa API key.
+
+```json
+{
+  "device_id": "solar-001",
+  "status": "online",
+  "last_seen": "2026-11-07T12:00:00.000Z",
+  "reason": "unknown"
+}
+```
+
+Status online jika data baru berhasil diterima dan disimpan kurang dari 180 detik
+lalu; tepat 180 detik atau lebih berarti offline. `last_seen` adalah waktu server
+UTC, bukan timestamp pengukuran ESP8266. Data buffer lama yang baru diterima tetap
+menandakan perangkat online. Ini bukan pemeriksaan langsung koneksi Wi-Fi.
+
+Jika belum ada data dengan waktu penerimaan yang diketahui, respons 200 berisi
+`status: "offline"`, `last_seen: null`, dan `reason: "unknown"`.
+Pengiriman duplikat tetap 409 dan tidak memperbarui last_seen. Alasan offline tidak
+bisa ditentukan dari ketiadaan data saja, sehingga `reason` selalu `unknown`.
+
+Migrasi `0002_sensor_received_at.sql` menambah kolom nullable `received_at` dan
+indeks per perangkat. Record lama tetap tersimpan dengan nilai NULL; timestamp lama
+tidak di-backfill menjadi waktu penerimaan palsu. Field baru tidak ditambahkan ke
+respons endpoint monitoring lama dan tidak mengubah perhitungan W/Wh.
+
+Terapkan migrasi terlebih dahulu sebelum menjalankan kode baru. Untuk lokal:
+
+```powershell
+npx wrangler d1 migrations apply DB --local
+```
+
+Penerapan migrasi remote dan deployment memerlukan persetujuan terpisah; belum
+pernah dijalankan untuk perubahan ini.
+
 ## Data sensor
 
 POST monitoring menerima JSON:
@@ -280,7 +318,7 @@ export/validasi/import terpisah sebelum pergantian produksi.
 npm test
 ```
 
-Hasil terakhir: **34 berhasil, 0 gagal**. Adapter binding D1 menjalankan SQL dan migrasi sebenarnya pada SQLite in-memory melalui `node:sqlite` (Node.js 24); seluruh akses jaringan diblokir. Cakupan mencakup 12 endpoint, beberapa perangkat, batas tanggal WIB, daftar izin, isolasi data, API key IoT/AI, validasi, duplikasi, foreign key, serta route yang dihapus. Tidak membaca `.dev.vars` atau mengakses produksi.
+Hasil terakhir: **40 berhasil, 0 gagal**. Adapter binding D1 menjalankan SQL dan migrasi sebenarnya pada SQLite in-memory melalui `node:sqlite` (Node.js 24); seluruh akses jaringan diblokir. Cakupan mencakup 13 endpoint, beberapa perangkat, batas tanggal WIB, daftar izin, isolasi data, API key IoT/AI, validasi, duplikasi, foreign key, serta route yang dihapus. Tidak membaca `.dev.vars` atau mengakses produksi.
 
 Build lokal:
 

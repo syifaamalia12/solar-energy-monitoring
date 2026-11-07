@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../src/index.js';
 const migration = readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8');
+const receivedAtMigration = readFileSync(new URL('../migrations/0002_sensor_received_at.sql', import.meta.url), 'utf8');
 let sql, env;
 const originalFetch = globalThis.fetch;
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone:'Asia/Jakarta', year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date());
@@ -23,7 +24,7 @@ async function request(path,{method='GET',body,key,headers={}}={},configuration=
 const postSensor = body => request('/api/v1/monitoring',{method:'POST',body,key:env.IOT_API_KEY});
 const postPrediction = body => request('/api/v1/ai/predictions',{method:'POST',body,key:env.AI_API_KEY});
 beforeEach(()=>{
- sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');sql.exec(migration);
+ sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');sql.exec(migration);sql.exec(receivedAtMigration);
  sql.prepare('INSERT INTO devices(device_id) VALUES (?), (?)').run('solar-001','solar-002');
  env={DB:binding(),IOT_API_KEY:'mock-iot',AI_API_KEY:'mock-ai',PUBLIC_DEVICE_IDS:'["solar-001","solar-002"]'};
  globalThis.fetch=async()=>{throw new Error('Network forbidden in tests');};
@@ -184,7 +185,7 @@ test('all history endpoints reject invalid dates, bad pagination and oversized r
  assert.equal((await request('/api/v1/monitoring/hourly-summary')).status,422);
 });
 test('large day pagination and aggregates include every reading without response truncation',async()=>{
- const stmt=sql.prepare('INSERT INTO sensor_readings VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+ const stmt=sql.prepare('INSERT INTO sensor_readings (device_id,reading_date,document_id,reading_id,timestamp,timestamp_ms,voltage_v,current_a,power_w,energy_wh,interval_seconds) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
  for(let i=0;i<1440;i++){const timestamp=new Date(Date.parse('2026-11-02T00:00:00+07:00')+i*60000).toISOString();stmt.run('solar-001','2026-11-02','bulk-'+i,'bulk-'+i,timestamp,Date.parse(timestamp),12,2,24,0.4,60);}
  const ids=[];for(let offset=0;offset<1440;offset+=1000){const body=await (await request(`/api/v1/monitoring/history?date=2026-11-02&limit=1000&offset=${offset}`)).json();ids.push(...body.data.map(r=>r.reading_id));}
  assert.equal(new Set(ids).size,1440);
@@ -228,4 +229,41 @@ test('hourly and period endpoints reject wrong methods, private devices and stay
  for(const path of ['/api/v1/monitoring/hourly-summary?date=2026-11-02','/api/v1/monitoring/period-summary?start_date=2026-11-02&end_date=2026-11-02']){
  assert.equal((await request(path,{method:'POST'})).status,405);assert.equal((await request(path+'&device_id=private')).status,404);}
  const plan=sql.prepare('EXPLAIN QUERY PLAN SELECT SUM(energy_wh) FROM sensor_readings WHERE device_id=? AND reading_date BETWEEN ? AND ?').all('solar-001','2026-11-01','2026-11-30');assert.ok(plan.some(row=>row.detail.includes('INDEX')));
+});
+
+test('device status uses server reception time, ignores ESP timestamp and client received_at',async(t)=>{
+ const now=Date.parse('2026-11-07T12:00:00Z');t.mock.timers.enable({apis:['Date'],now});
+ const response=await postSensor(sensor({timestamp:'2026-11-02T00:00:00Z',received_at:'2000-01-01T00:00:00Z'}));assert.equal(response.status,200);
+ const received=sql.prepare('SELECT received_at FROM sensor_readings').get().received_at;assert.equal(received,'2026-11-07T12:00:00.000Z');
+ assert.deepEqual(await (await request('/api/v1/devices/solar-001/status')).json(),{device_id:'solar-001',status:'online',last_seen:received,reason:'unknown'});
+ t.mock.timers.setTime(now+179999);assert.equal((await (await request('/api/v1/devices/solar-001/status')).json()).status,'online');
+ t.mock.timers.setTime(now+180000);assert.equal((await (await request('/api/v1/devices/solar-001/status')).json()).status,'offline');
+ t.mock.timers.setTime(now+600000);assert.equal((await (await request('/api/v1/devices/solar-001/status')).json()).status,'offline');
+});
+test('device status handles no readings and isolates devices',async()=>{
+ assert.deepEqual(await (await request('/api/v1/devices/solar-001/status')).json(),{device_id:'solar-001',status:'offline',last_seen:null,reason:'unknown'});
+ await postSensor(sensor());assert.equal((await (await request('/api/v1/devices/solar-001/status')).json()).status,'online');
+ assert.equal((await (await request('/api/v1/devices/solar-002/status')).json()).last_seen,null);
+});
+test('duplicate reading does not change server receipt time',async(t)=>{
+ const now=Date.parse('2026-11-07T12:00:00Z');t.mock.timers.enable({apis:['Date'],now});const body=sensor();await postSensor(body);
+ t.mock.timers.setTime(now+180000);assert.equal((await postSensor(body)).status,409);
+ const response=await (await request('/api/v1/devices/solar-001/status')).json();assert.equal(response.status,'offline');assert.equal(response.last_seen,'2026-11-07T12:00:00.000Z');
+});
+test('last_seen follows receipt order rather than measurement order',async(t)=>{
+ const now=Date.parse('2026-11-07T12:00:00Z');t.mock.timers.enable({apis:['Date'],now});await postSensor(sensor());
+ t.mock.timers.setTime(now+60000);await postSensor(sensor({reading_id:'buffered',timestamp:'2026-11-01T00:00:00Z'}));
+ assert.equal((await (await request('/api/v1/devices/solar-001/status')).json()).last_seen,'2026-11-07T12:01:00.000Z');
+});
+test('status access respects public list and rejects invalid IDs, methods and database failures',async()=>{
+ assert.equal((await request('/api/v1/devices/private/status')).status,404);
+ assert.equal((await request('/api/v1/devices/bad.id/status')).status,422);
+ assert.equal((await request('/api/v1/devices/a%2Fb/status')).status,422);
+ assert.equal((await request('/api/v1/devices/solar-001/status',{method:'POST'})).status,405);
+ assert.equal((await request('/api/v1/devices/solar-001/status',{}, {...env,DB:undefined})).status,503);
+});
+test('received_at migration preserves existing rows without fabricating last_seen',async()=>{
+ const old=new DatabaseSync(':memory:');try{old.exec(migration);old.prepare('INSERT INTO sensor_readings VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('solar-001','2026-11-02','old','old','2026-11-02T00:00:00Z',Date.parse('2026-11-02T00:00:00Z'),12,2,24,0.4,60);old.exec(receivedAtMigration);
+ const row=old.prepare('SELECT * FROM sensor_readings').get();assert.equal(row.energy_wh,0.4);assert.equal(row.received_at,null);assert.equal(row.reading_id,'old');}finally{old.close();}
+ await postSensor(sensor());sql.exec('UPDATE sensor_readings SET received_at=NULL');assert.equal((await (await request('/api/v1/devices/solar-001/status')).json()).last_seen,null);
 });

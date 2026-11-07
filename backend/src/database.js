@@ -12,12 +12,19 @@ export async function readSensorDay(env, deviceId, date) {
 export async function insertSensor(env, row, date, documentId) {
   const result = await db(env).prepare(`INSERT INTO sensor_readings
     (device_id, reading_date, document_id, reading_id, timestamp, timestamp_ms,
-     voltage_v, current_a, power_w, energy_wh, interval_seconds)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     voltage_v, current_a, power_w, energy_wh, interval_seconds, received_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(device_id, reading_date, document_id) DO NOTHING`).bind(
     row.device_id, date, documentId, row.reading_id, row.timestamp, Date.parse(row.timestamp),
-    row.voltage_v, row.current_a, row.power_w, row.energy_wh, row.interval_seconds).run();
+    row.voltage_v, row.current_a, row.power_w, row.energy_wh, row.interval_seconds,
+    new Date().toISOString()).run();
   return result.meta.changes > 0;
+}
+export async function lastReceivedAt(env, deviceId) {
+  const row = await db(env).prepare(`SELECT received_at FROM sensor_readings
+    WHERE device_id = ? AND received_at IS NOT NULL
+    ORDER BY received_at DESC LIMIT 1`).bind(deviceId).first();
+  return row?.received_at ?? null;
 }
 export async function findDevice(env, deviceId) {
   return db(env).prepare("SELECT device_id FROM devices WHERE device_id = ?").bind(deviceId).first();

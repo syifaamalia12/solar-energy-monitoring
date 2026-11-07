@@ -1,7 +1,7 @@
 
 import { errorResponse, requirePrototypeDevice } from "./api.js";
 import { handlePredictions, verifyAI } from "./predictions.js";
-import { readSensorDay, insertSensor } from "./database.js";
+import { readSensorDay, insertSensor, lastReceivedAt } from "./database.js";
 import { handleHistory } from "./history.js";
 
 const ZONE = "Asia/Jakarta";
@@ -118,6 +118,23 @@ const api = {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+
+    const statusRoute = /^\/api\/v1\/devices\/([^/]+)\/status$/.exec(path);
+    if (statusRoute) {
+      if (request.method !== "GET") return json({ detail: "Method Not Allowed" }, 405);
+      try {
+        let deviceId;
+        try { deviceId = decodeURIComponent(statusRoute[1]); }
+        catch { return json({ detail: "Invalid device_id" }, 422); }
+        requirePrototypeDevice(deviceId, env);
+        const receivedAt = await lastReceivedAt(env, deviceId);
+        const lastSeenMs = receivedAt === null ? NaN : Date.parse(receivedAt);
+        const age = Date.now() - lastSeenMs;
+        return json({ device_id: deviceId,
+          status: Number.isFinite(age) && age >= 0 && age < 180000 ? "online" : "offline",
+          last_seen: Number.isFinite(lastSeenMs) ? receivedAt : null, reason: "unknown" });
+      } catch (error) { return errorResponse(error); }
+    }
 
     if (["/api/v1/ai/predictions", "/api/v1/ai/predictions/latest", "/api/v1/ai/predictions/history"].includes(path)) {
       return handlePredictions(request, env, path);
